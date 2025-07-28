@@ -1,7 +1,7 @@
-// src/app.js - Con soporte de cookies
+// src/app.js - Con soporte de cookies y notificaciones
 const express = require('express');
 const cors = require('cors');
-const cookieParser = require('cookie-parser'); // NUEVO
+const cookieParser = require('cookie-parser');
 
 const app = express();
 
@@ -11,7 +11,7 @@ app.use(cors({
   credentials: true // IMPORTANTE: Para que funcionen las cookies
 }));
 
-app.use(cookieParser()); // NUEVO: Para parsear cookies
+app.use(cookieParser());
 app.use(express.json());
 
 // Middleware de logging
@@ -26,19 +26,22 @@ app.get('/api/health', (req, res) => {
     status: 'OK',
     message: 'Servidor funcionando correctamente',
     timestamp: new Date().toISOString(),
-    cookies: req.cookies // Para debug: mostrar cookies recibidas
+    cookies: req.cookies
   });
 });
 
-// rutas
+// Rutas
 const authRoutes = require('./routes/authRoutes');
 const materiaRoutes = require('./routes/materiaRoutes');
 const asistenciaRoutes = require('./routes/asistenciaRoutes');
+const notificacionesRoutes = require('./routes/notificacionesRoutes'); // NUEVO
 
 app.use('/api/auth', authRoutes);
 app.use('/api/materias', materiaRoutes);
 app.use('/api/asistencias', asistenciaRoutes);
+app.use('/api/notificaciones', notificacionesRoutes); // NUEVO
 
+// Middleware de manejo de errores
 app.use((error, req, res, next) => {
   console.error('Error:', error);
   res.status(500).json({
@@ -47,6 +50,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-console.log('App configurada correctamente con soporte de cookies');
+console.log('App configurada correctamente con soporte de cookies y notificaciones');
 
 module.exports = app;
