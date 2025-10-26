@@ -1,4 +1,3 @@
-// src/config/database.js
 const mysql = require('mysql2/promise');
 
 const dbConfig = {
@@ -13,10 +12,8 @@ const dbConfig = {
   timezone: 'Z'
 };
 
-// Pool de conexiones para mejor performance
 const pool = mysql.createPool(dbConfig);
 
-// Función para obtener conexión
 const getConnection = async () => {
   try {
     const connection = await pool.getConnection();
@@ -27,7 +24,6 @@ const getConnection = async () => {
   }
 };
 
-// Función para ejecutar queries
 const executeQuery = async (query, params = []) => {
   const connection = await getConnection();
   try {
@@ -41,7 +37,7 @@ const executeQuery = async (query, params = []) => {
   }
 };
 
-// Función para transacciones
+
 const executeTransaction = async (queries) => {
   const connection = await getConnection();
   try {
@@ -64,7 +60,6 @@ const executeTransaction = async (queries) => {
   }
 };
 
-// Función para verificar conexión
 const testConnection = async () => {
   try {
     const connection = await getConnection();

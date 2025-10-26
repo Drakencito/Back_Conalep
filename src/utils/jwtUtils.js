@@ -1,10 +1,8 @@
-// src/utils/jwtUtils.js
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'tu_secret_key_super_segura';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
-// Generar token JWT
 const generateToken = (payload) => {
   return jwt.sign(payload, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
@@ -13,7 +11,6 @@ const generateToken = (payload) => {
   });
 };
 
-// Verificar token JWT
 const verifyToken = (token) => {
   try {
     return jwt.verify(token, JWT_SECRET, {
@@ -25,12 +22,10 @@ const verifyToken = (token) => {
   }
 };
 
-// Decodificar token sin verificar (útil para obtener info del payload)
 const decodeToken = (token) => {
   return jwt.decode(token);
 };
 
-// Obtener tiempo de expiración de un token
 const getTokenExpiration = (token) => {
   try {
     const decoded = jwt.decode(token);
@@ -40,7 +35,6 @@ const getTokenExpiration = (token) => {
   }
 };
 
-// Verificar si un token está por expirar (dentro de los próximos X minutos)
 const isTokenExpiringSoon = (token, minutesBeforeExpiry = 30) => {
   try {
     const expiration = getTokenExpiration(token);

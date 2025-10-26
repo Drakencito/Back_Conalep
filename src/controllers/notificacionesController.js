@@ -1,10 +1,7 @@
-// src/controllers/notificacionesController.js
 const { executeQuery, executeTransaction } = require('../config/database');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
-// ================== FUNCIONES PARA MAESTROS ==================
 
-// Obtener materias y alumnos que puede notificar el maestro
 const getDestinatariosMaestro = asyncHandler(async (req, res) => {
   const { id: maestroId, userType } = req.user;
   
@@ -12,7 +9,7 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
     throw new AppError('Solo maestros pueden acceder a esta información', 403, 'ACCESS_DENIED');
   }
 
-  // Obtener materias del maestro
+
   const materiasQuery = `
     SELECT 
       c.clase_id,
@@ -28,7 +25,6 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
 
   const materias = await executeQuery(materiasQuery, [maestroId]);
 
-  // Obtener todos los alumnos de todas sus materias
   const alumnosQuery = `
     SELECT DISTINCT
       a.alumno_id,
@@ -60,7 +56,6 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
   });
 });
 
-// Crear notificación (maestro - requiere aprobación)
 const crearNotificacionMaestro = asyncHandler(async (req, res) => {
 console.log('🔔 Iniciando crearNotificacionMaestro');
   console.log('📝 Body recibido:', req.body);
@@ -72,7 +67,7 @@ console.log('🔔 Iniciando crearNotificacionMaestro');
     throw new AppError('Solo maestros pueden crear notificaciones', 403, 'ACCESS_DENIED');
   }
 
-  // Validaciones
+
   if (!titulo || !mensaje || !tipo_destinatario) {
     throw new AppError('Título, mensaje y tipo de destinatario son requeridos', 400, 'MISSING_FIELDS');
   }
@@ -86,9 +81,7 @@ console.log('🔔 Iniciando crearNotificacionMaestro');
     throw new AppError('Tipo de destinatario inválido', 400, 'INVALID_RECIPIENT_TYPE');
   }
 
-  // Verificar que el maestro tenga acceso a los destinatarios especificados
   if (tipo_destinatario === 'Alumno_Especifico') {
-    // Verificar que todos los alumnos estén en clases del maestro
     const placeholders = destinatarios.map(() => '?').join(',');
     const verificacionQuery = `
       SELECT DISTINCT a.alumno_id 
@@ -105,7 +98,6 @@ console.log('🔔 Iniciando crearNotificacionMaestro');
     }
   } 
   else if (tipo_destinatario === 'Materia_Completa' || tipo_destinatario === 'Multiples_Materias') {
-    // Verificar que todas las materias pertenezcan al maestro
     const placeholders = destinatarios.map(() => '?').join(',');
     const verificacionQuery = `
       SELECT clase_id FROM clases 
@@ -119,14 +111,12 @@ console.log('🔔 Iniciando crearNotificacionMaestro');
     }
   }
 
-  // Crear la notificación con status 'Pendiente'
   const insertQuery = `
     INSERT INTO notificaciones 
     (titulo, mensaje, tipo_destinatario, destinatario_id, destinatario_grupo, destinatario_grado, status, creado_por_id, creado_por_tipo)
     VALUES (?, ?, ?, ?, NULL, NULL, 'Pendiente', ?, 'maestro')
   `;
 
-  // Para simplificar, guardamos los destinatarios como JSON en destinatario_id
   const destinatariosJson = JSON.stringify(destinatarios);
   
   const result = await executeQuery(insertQuery, [
@@ -185,7 +175,6 @@ const getNotificacionesMaestro = asyncHandler(async (req, res) => {
 
   const notificaciones = await executeQuery(query, params);
 
-  // Procesar destinatarios para mostrar información legible
   const notificacionesProcesadas = await Promise.all(
     notificaciones.map(async (notif) => {
       let destinatariosInfo = '';
@@ -227,9 +216,7 @@ const getNotificacionesMaestro = asyncHandler(async (req, res) => {
   });
 });
 
-// ================== FUNCIONES PARA ADMINISTRADORES ==================
 
-// Obtener notificaciones pendientes de aprobación
 const getNotificacionesPendientes = asyncHandler(async (req, res) => {
   const { userType } = req.user;
   
@@ -264,10 +251,9 @@ const getNotificacionesPendientes = asyncHandler(async (req, res) => {
   });
 });
 
-// Aprobar o rechazar notificación
 const moderarNotificacion = asyncHandler(async (req, res) => {
   const { notificacionId } = req.params;
-  const { accion, comentario } = req.body; // accion: 'aprobar' o 'rechazar'
+  const { accion, comentario } = req.body; 
   const { id: adminId, userType } = req.user;
   
   if (userType !== 'administrador') {
@@ -278,7 +264,6 @@ const moderarNotificacion = asyncHandler(async (req, res) => {
     throw new AppError('Acción inválida. Use "aprobar" o "rechazar"', 400, 'INVALID_ACTION');
   }
 
-  // Verificar que la notificación existe y está pendiente
   const notificacionCheck = await executeQuery(
     'SELECT notificacion_id, status FROM notificaciones WHERE notificacion_id = ?',
     [notificacionId]
@@ -313,7 +298,6 @@ const moderarNotificacion = asyncHandler(async (req, res) => {
   });
 });
 
-// Crear notificación directa (administrador - sin aprobación)
 const crearNotificacionAdmin = asyncHandler(async (req, res) => {
   const { titulo, mensaje, tipo_destinatario, destinatarios } = req.body;
   const { id: adminId, userType } = req.user;
@@ -322,7 +306,6 @@ const crearNotificacionAdmin = asyncHandler(async (req, res) => {
     throw new AppError('Solo administradores pueden crear notificaciones directas', 403, 'ACCESS_DENIED');
   }
 
-  // Validaciones básicas
   if (!titulo || !mensaje || !tipo_destinatario) {
     throw new AppError('Título, mensaje y tipo de destinatario son requeridos', 400, 'MISSING_FIELDS');
   }
@@ -331,13 +314,11 @@ const crearNotificacionAdmin = asyncHandler(async (req, res) => {
     throw new AppError('Debe especificar al menos un destinatario', 400, 'NO_RECIPIENTS');
   }
 
-  // Los administradores pueden usar más tipos de destinatario
   const tiposValidos = ['Alumno_Especifico', 'Materia_Completa', 'Multiples_Materias', 'Grado_Completo', 'Grupo_Especifico', 'Todos_Alumnos'];
   if (!tiposValidos.includes(tipo_destinatario)) {
     throw new AppError('Tipo de destinatario inválido', 400, 'INVALID_RECIPIENT_TYPE');
   }
 
-  // Crear la notificación con status 'Aprobada' (directa)
   const insertQuery = `
     INSERT INTO notificaciones 
     (titulo, mensaje, tipo_destinatario, destinatario_id, destinatario_grupo, destinatario_grado, status, creado_por_id, creado_por_tipo, aprobado_por_id)
@@ -367,9 +348,6 @@ const crearNotificacionAdmin = asyncHandler(async (req, res) => {
   });
 });
 
-// ================== FUNCIONES PARA ALUMNOS ==================
-
-// Obtener notificaciones del alumno
 const getNotificacionesAlumno = asyncHandler(async (req, res) => {
     console.log('🎓 Iniciando getNotificacionesAlumno');
     console.log('👤 Usuario alumno:', req.user);
@@ -377,7 +355,7 @@ const getNotificacionesAlumno = asyncHandler(async (req, res) => {
     const { id: alumnoId, userType } = req.user;
     const { limite = 20 } = req.query;
     
-    console.log('📝 alumnoId:', alumnoId, 'userType:', userType);
+    console.log(' alumnoId:', alumnoId, 'userType:', userType);
     
     if (userType !== 'alumno') {
       throw new AppError('Solo alumnos pueden acceder a esta información', 403, 'ACCESS_DENIED');
@@ -386,29 +364,26 @@ const getNotificacionesAlumno = asyncHandler(async (req, res) => {
     try {
       console.log('🔍 Buscando datos del alumno...');
       
-      // Obtener datos del alumno
       const alumnoQuery = `SELECT grado, grupo FROM alumnos WHERE alumno_id = ?`;
-      console.log('📊 Query alumno:', alumnoQuery, 'Params:', [alumnoId]);
+      console.log(' Query alumno:', alumnoQuery, 'Params:', [alumnoId]);
       
       const alumnoData = await executeQuery(alumnoQuery, [alumnoId]);
-      console.log('📊 Datos del alumno:', alumnoData);
+      console.log(' Datos del alumno:', alumnoData);
       
       if (alumnoData.length === 0) {
         throw new AppError('Alumno no encontrado', 404, 'STUDENT_NOT_FOUND');
       }
   
       const { grado, grupo } = alumnoData[0];
-      console.log('📊 Grado y grupo:', grado, grupo);
+      console.log(' Grado y grupo:', grado, grupo);
   
-      // Obtener materias del alumno
-      console.log('🔍 Buscando materias del alumno...');
+      console.log(' Buscando materias del alumno...');
       const materiasQuery = `SELECT clase_id FROM inscripciones WHERE alumno_id = ?`;
       const materiasAlumno = await executeQuery(materiasQuery, [alumnoId]);
       const materiasIds = materiasAlumno.map(m => m.clase_id);
-      console.log('📚 Materias del alumno:', materiasIds);
+      console.log(' Materias del alumno:', materiasIds);
   
-      // Query simplificada
-      console.log('🔍 Buscando notificaciones...');
+      console.log(' Buscando notificaciones...');
 
 const limiteSeguro = Math.max(1, Math.min(100, parseInt(limite)));
 const query = `
@@ -425,12 +400,11 @@ const query = `
   LIMIT ${limiteSeguro}
 `;
 
-console.log('📊 Query final:', query);
+console.log(' Query final:', query);
 
 const todasNotificaciones = await executeQuery(query, []);
-console.log('📨 Notificaciones encontradas:', todasNotificaciones.length);
+console.log(' Notificaciones encontradas:', todasNotificaciones.length);
 
-// Filtrar en JavaScript las notificaciones relevantes para este alumno
 const notificacionesFiltradas = todasNotificaciones.filter(notif => {
   try {
     const destinatarios = JSON.parse(notif.destinatario_id);
@@ -448,9 +422,8 @@ const notificacionesFiltradas = todasNotificaciones.filter(notif => {
   }
 });
 
-console.log('✅ Notificaciones filtradas:', notificacionesFiltradas.length);
+console.log(' Notificaciones filtradas:', notificacionesFiltradas.length);
 
-// Limpiar el campo destinatario_id de la respuesta
 const notificacionesLimpias = notificacionesFiltradas.map(notif => {
   const { destinatario_id, ...resto } = notif;
   return resto;
@@ -462,22 +435,19 @@ res.json({
 });
       
     } catch (error) {
-      console.error('❌ Error específico en getNotificacionesAlumno:', error);
+      console.error(' Error específico en getNotificacionesAlumno:', error);
       throw error;
     }
   });
 
 module.exports = {
-  // Maestros
   getDestinatariosMaestro,
   crearNotificacionMaestro,
   getNotificacionesMaestro,
   
-  // Administradores
   getNotificacionesPendientes,
   moderarNotificacion,
   crearNotificacionAdmin,
   
-  // Alumnos
   getNotificacionesAlumno
 };

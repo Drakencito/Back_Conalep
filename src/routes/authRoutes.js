@@ -1,10 +1,8 @@
-// src/routes/authRoutes.js - Rutas completas
 const express = require('express');
 const router = express.Router();
 
-console.log('Iniciando carga de rutas...');
+console.log('Iniciando carga de rutas de autenticación...');
 
-// Ruta de prueba
 router.get('/test', (req, res) => {
   res.json({
     success: true,
@@ -14,32 +12,37 @@ router.get('/test', (req, res) => {
 
 console.log('Ruta /test definida');
 
-// Importar middleware y controladores
 try {
-  const { authenticateToken } = require('../middleware/auth');
+  const { authenticateToken, requireAdministrador } = require('../middleware/auth');
   const {
     loginWithEmail,
     getProfile,
-    logout
+    logout,
+    registerFirstAdmin,
+    registerAdmin,
+    checkAdminsExist
   } = require('../controllers/authController');
 
   console.log('Middleware y controladores importados');
-
-  // Rutas públicas
   router.post('/login', loginWithEmail);
   console.log('Ruta POST /login definida');
+  router.get('/check-admins', checkAdminsExist);
+  console.log('Ruta GET /check-admins definida');
 
-  // Rutas protegidas
+
+  router.post('/register-first-admin', registerFirstAdmin);
+  console.log('Ruta POST /register-first-admin definida');
   router.get('/profile', authenticateToken, getProfile);
   console.log('Ruta GET /profile definida');
-
   router.post('/logout', authenticateToken, logout);
   console.log('Ruta POST /logout definida');
+  router.post('/register-admin', authenticateToken, requireAdministrador, registerAdmin);
+  console.log('Ruta POST /register-admin definida');
 
 } catch (error) {
   console.error('Error importando controladores:', error.message);
 }
 
-console.log('Rutas completas definidas, exportando router...');
+console.log('Rutas de autenticación completas definidas');
 
 module.exports = router;

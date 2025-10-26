@@ -1,8 +1,6 @@
-// src/controllers/materiaController.js
 const { executeQuery } = require('../config/database');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
-// Obtener materias del maestro (con alumnos inscritos)
 const getMateriasMaestro = asyncHandler(async (req, res) => {
   const { id: maestroId, userType } = req.user;
   
@@ -31,7 +29,6 @@ const getMateriasMaestro = asyncHandler(async (req, res) => {
   });
 });
 
-// Obtener materias del alumno (con información del profesor)
 const getMateriasAlumno = asyncHandler(async (req, res) => {
   const { id: alumnoId, userType } = req.user;
   
@@ -63,7 +60,6 @@ const getMateriasAlumno = asyncHandler(async (req, res) => {
   });
 });
 
-// Obtener alumnos de una materia específica (para maestros)
 const getAlumnosMateria = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
   const { id: maestroId, userType } = req.user;
@@ -72,7 +68,6 @@ const getAlumnosMateria = asyncHandler(async (req, res) => {
     throw new AppError('Solo maestros pueden acceder a esta información', 403, 'ACCESS_DENIED');
   }
 
-  // Verificar que la materia pertenece al maestro
   const claseCheck = await executeQuery(
     'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
     [materiaId, maestroId]
