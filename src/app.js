@@ -17,7 +17,6 @@ app.use((req, res, next) => {
   next();
 });
 
-
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK',
@@ -26,29 +25,38 @@ app.get('/api/health', (req, res) => {
     cookies: req.cookies
   });
 });
+// RUTAS DE AUTENTICACIÓN 
 
+const adminAuthRoutes = require('./routes/adminAuthRoutes');
+app.use('/api/auth/admin', adminAuthRoutes);
 
-const authRoutes = require('./routes/authRoutes');
+const mobileAuthRoutes = require('./routes/mobileAuthRoutes');
+app.use('/api/auth/mobile', mobileAuthRoutes);
+
+// RUTAS DE RECURSOS
+
 const materiaRoutes = require('./routes/materiaRoutes');
 const asistenciaRoutes = require('./routes/asistenciaRoutes');
 const notificacionesRoutes = require('./routes/notificacionesRoutes');
-const adminRoutes = require('./routes/adminRoutes'); 
+const adminRoutes = require('./routes/adminRoutes');
 
-app.use('/api/auth', authRoutes);
 app.use('/api/materias', materiaRoutes);
 app.use('/api/asistencias', asistenciaRoutes);
 app.use('/api/notificaciones', notificacionesRoutes);
-app.use('/api/admin', adminRoutes); 
-
+app.use('/api/admin', adminRoutes);
 
 app.use((error, req, res, next) => {
   console.error('Error:', error);
-  res.status(500).json({
+  res.status(error.statusCode || 500).json({
     success: false,
-    error: 'Error interno del servidor'
+    error: error.message || 'Error interno del servidor',
+    code: error.code || 'INTERNAL_ERROR',
+    ...(process.env.NODE_ENV === 'development' && {
+      stack: error.stack
+    })
   });
 });
 
-console.log('App configurada correctamente ');
+console.log(' App configurada ');
 
 module.exports = app;

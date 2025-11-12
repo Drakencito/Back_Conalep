@@ -897,6 +897,297 @@ const getGradosYGrupos = asyncHandler(async (req, res) => {
     }
   });
 });
+
+// GESTIÓN DE NOTIFICACIONES
+
+const getAllNotificaciones = asyncHandler(async (req, res) => {
+  const { status, tipo, page = 1, limit = 50 } = req.query;
+  
+  let query = `
+    SELECT 
+      n.notificacion_id,
+      n.titulo,
+      n.mensaje,
+      n.tipo_destinatario,
+      n.status,
+      n.creado_por_tipo,
+      DATE_FORMAT(n.fecha_creacion, '%d/%m/%Y %H:%i') as fecha_creacion,
+      DATE_FORMAT(n.fecha_aprobacion, '%d/%m/%Y %H:%i') as fecha_aprobacion,
+      CASE 
+        WHEN n.creado_por_tipo = 'maestro' THEN m.nombre
+        WHEN n.creado_por_tipo = 'administrador' THEN a.nombre
+      END as creador_nombre,
+      CASE 
+        WHEN n.creado_por_tipo = 'maestro' THEN m.apellido_paterno
+        WHEN n.creado_por_tipo = 'administrador' THEN a.apellido_paterno
+      END as creador_apellido,
+      DATEDIFF(NOW(), n.fecha_creacion) as dias_antiguedad
+    FROM notificaciones n
+    LEFT JOIN maestros m ON n.creado_por_id = m.maestro_id AND n.creado_por_tipo = 'maestro'
+    LEFT JOIN administradores a ON n.creado_por_id = a.admin_id AND n.creado_por_tipo = 'administrador'
+    WHERE 1=1
+  `;
+  
+  const params = [];
+
+  if (status) {
+    query += ' AND n.status = ?';
+    params.push(status);
+  }
+
+  if (tipo) {
+    query += ' AND n.tipo_destinatario = ?';
+    params.push(tipo);
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  query += ` ORDER BY n.fecha_creacion DESC LIMIT ${parseInt(limit)} OFFSET ${offset}`;
+
+  const notificaciones = await executeQuery(query, params);
+  
+  // Contar total
+  let countQuery = 'SELECT COUNT(*) as total FROM notificaciones WHERE 1=1';
+  if (status) countQuery += ' AND status = ?';
+  if (tipo) countQuery += ' AND tipo_destinatario = ?';
+  
+  const [{ total }] = await executeQuery(countQuery, params);
+
+  res.json({
+    success: true,
+    data: notificaciones,
+    pagination: {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / parseInt(limit))
+    }
+  });
+});
+
+
+//Editar una notificación aprobada
+
+const editNotificacion = asyncHandler(async (req, res) => {
+  const { notificacionId } = req.params;
+  const { titulo, mensaje } = req.body;
+  
+  if (!titulo && !mensaje) {
+    throw new AppError('Debes proporcionar al menos título o mensaje para actualizar', 400, 'NO_FIELDS');
+  }
+
+  // Verificar que la notificación existe y está aprobada
+  const notificacion = await executeQuery(
+    'SELECT status FROM notificaciones WHERE notificacion_id = ?',
+    [notificacionId]
+  );
+
+  if (notificacion.length === 0) {
+    throw new AppError('Notificación no encontrada', 404, 'NOTIFICATION_NOT_FOUND');
+  }
+
+  if (notificacion[0].status !== 'Aprobada') {
+    throw new AppError('Solo se pueden editar notificaciones aprobadas', 400, 'NOT_APPROVED');
+  }
+
+  const updates = [];
+  const values = [];
+
+  if (titulo) {
+    updates.push('titulo = ?');
+    values.push(titulo);
+  }
+
+  if (mensaje) {
+    updates.push('mensaje = ?');
+    values.push(mensaje);
+  }
+
+  values.push(notificacionId);
+
+  await executeQuery(
+    `UPDATE notificaciones SET ${updates.join(', ')} WHERE notificacion_id = ?`,
+    values
+  );
+
+  res.json({
+    success: true,
+    message: 'Notificación actualizada exitosamente'
+  });
+});
+
+// Eliminar una notificación 
+
+const deleteNotificacion = asyncHandler(async (req, res) => {
+  const { notificacionId } = req.params;
+
+  const notificacion = await executeQuery(
+    'SELECT notificacion_id FROM notificaciones WHERE notificacion_id = ?',
+    [notificacionId]
+  );
+
+  if (notificacion.length === 0) {
+    throw new AppError('Notificación no encontrada', 404, 'NOTIFICATION_NOT_FOUND');
+  }
+
+  await executeQuery('DELETE FROM notificaciones WHERE notificacion_id = ?', [notificacionId]);
+
+  res.json({
+    success: true,
+    message: 'Notificación eliminada permanentemente'
+  });
+});
+
+
+//Limpiar notificaciones expiradas 
+const cleanExpiredNotificaciones = asyncHandler(async (req, res) => {
+  const result = await executeQuery(`
+    DELETE FROM notificaciones 
+    WHERE fecha_creacion < DATE_SUB(NOW(), INTERVAL 14 DAY)
+  `);
+
+  res.json({
+    success: true,
+    message: `${result.affectedRows} notificaciones antiguas eliminadas`,
+    data: {
+      notificaciones_eliminadas: result.affectedRows
+    }
+  });
+});
+
+// GESTIÓN DE ASISTENCIAS
+
+
+//Ver asistencias de una clase específica
+
+const getAsistenciasByClase = asyncHandler(async (req, res) => {
+  const { claseId } = req.params;
+  const { fecha_inicio, fecha_fin, alumno_id, page = 1, limit = 100 } = req.query;
+
+  // Verificar que la clase existe
+  const clase = await executeQuery(
+    'SELECT clase_id, nombre_clase, codigo_clase FROM clases WHERE clase_id = ?',
+    [claseId]
+  );
+
+  if (clase.length === 0) {
+    throw new AppError('Clase no encontrada', 404, 'CLASE_NOT_FOUND');
+  }
+
+  let query = `
+    SELECT 
+      a.asistencia_id,
+      a.fecha_asistencia,
+      a.estado_asistencia,
+      al.alumno_id,
+      al.nombre,
+      al.apellido_paterno,
+      al.apellido_materno,
+      al.matricula,
+      m.nombre as registrado_por_nombre,
+      m.apellido_paterno as registrado_por_apellido
+    FROM asistencias a
+    JOIN alumnos al ON a.alumno_id = al.alumno_id
+    LEFT JOIN maestros m ON a.registrado_por = m.maestro_id
+    WHERE a.clase_id = ?
+  `;
+
+  const params = [claseId];
+
+  if (fecha_inicio && fecha_fin) {
+    query += ' AND a.fecha_asistencia BETWEEN ? AND ?';
+    params.push(fecha_inicio, fecha_fin);
+  }
+
+  if (alumno_id) {
+    query += ' AND a.alumno_id = ?';
+    params.push(alumno_id);
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  query += ` ORDER BY a.fecha_asistencia DESC, al.apellido_paterno, al.nombre LIMIT ${parseInt(limit)} OFFSET ${offset}`;
+
+  const asistencias = await executeQuery(query, params);
+
+  // Estadísticas generales
+  const stats = await executeQuery(`
+    SELECT 
+      COUNT(*) as total_registros,
+      SUM(CASE WHEN estado_asistencia = 'Presente' THEN 1 ELSE 0 END) as presentes,
+      SUM(CASE WHEN estado_asistencia = 'Ausente' THEN 1 ELSE 0 END) as ausentes,
+      SUM(CASE WHEN estado_asistencia = 'Retardo' THEN 1 ELSE 0 END) as retardos,
+      SUM(CASE WHEN estado_asistencia = 'Justificado' THEN 1 ELSE 0 END) as justificados
+    FROM asistencias
+    WHERE clase_id = ?
+  `, [claseId]);
+
+  res.json({
+    success: true,
+    data: {
+      clase: clase[0],
+      asistencias: asistencias,
+      estadisticas: stats[0]
+    }
+  });
+});
+
+
+//Eliminar TODO el historial de asistencias de una clase
+const deleteAllAsistenciasClase = asyncHandler(async (req, res) => {
+  const { claseId } = req.params;
+
+  // Verificar que la clase existe
+  const clase = await executeQuery(
+    'SELECT nombre_clase FROM clases WHERE clase_id = ?',
+    [claseId]
+  );
+
+  if (clase.length === 0) {
+    throw new AppError('Clase no encontrada', 404, 'CLASE_NOT_FOUND');
+  }
+
+  // Contar registros antes de eliminar
+  const [{ total }] = await executeQuery(
+    'SELECT COUNT(*) as total FROM asistencias WHERE clase_id = ?',
+    [claseId]
+  );
+
+  if (total === 0) {
+    throw new AppError('No hay registros de asistencia para esta clase', 404, 'NO_RECORDS');
+  }
+
+  // Eliminar todos los registros
+  await executeQuery('DELETE FROM asistencias WHERE clase_id = ?', [claseId]);
+
+  res.json({
+    success: true,
+    message: `Historial de asistencias eliminado para la clase: ${clase[0].nombre_clase}`,
+    data: {
+      registros_eliminados: total
+    }
+  });
+});
+
+
+//Eliminar asistencia individual 
+const deleteAsistencia = asyncHandler(async (req, res) => {
+  const { asistenciaId } = req.params;
+
+  const asistencia = await executeQuery(
+    'SELECT asistencia_id FROM asistencias WHERE asistencia_id = ?',
+    [asistenciaId]
+  );
+
+  if (asistencia.length === 0) {
+    throw new AppError('Registro de asistencia no encontrado', 404, 'ASISTENCIA_NOT_FOUND');
+  }
+
+  await executeQuery('DELETE FROM asistencias WHERE asistencia_id = ?', [asistenciaId]);
+
+  res.json({
+    success: true,
+    message: 'Registro de asistencia eliminado'
+  });
+});
 module.exports = {
   getDashboardStats,
   getGradosYGrupos,
@@ -929,5 +1220,15 @@ module.exports = {
   
   getInscripcionesByClase,
   addAlumnoToClase,
-  removeAlumnoFromClase
+  removeAlumnoFromClase,
+
+  getAllNotificaciones,
+  editNotificacion,
+  deleteNotificacion,
+  cleanExpiredNotificaciones,
+  
+  // Asistencias
+  getAsistenciasByClase,
+  deleteAllAsistenciasClase,
+  deleteAsistencia
 };
