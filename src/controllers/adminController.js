@@ -1,6 +1,7 @@
 const { executeQuery, executeTransaction } = require('../config/database');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
+// controllers de el dashboard
 const getDashboardStats = asyncHandler(async (req, res) => {
   const [alumnos, maestros, clases, notificacionesPendientes] = await Promise.all([
     executeQuery('SELECT COUNT(*) as total FROM alumnos'),
@@ -28,6 +29,21 @@ const getDashboardStats = asyncHandler(async (req, res) => {
   });
 });
 
+const getGradosYGrupos = asyncHandler(async (req, res) => {
+  const [grados, grupos] = await Promise.all([
+    executeQuery('SELECT DISTINCT grado FROM alumnos ORDER BY grado'),
+    executeQuery('SELECT DISTINCT grupo FROM alumnos ORDER BY grupo')
+  ]);
+
+  res.json({
+    success: true,
+    data: {
+      grados: grados.map(g => g.grado),
+      grupos: grupos.map(g => g.grupo)
+    }
+  });
+});
+// controllers de alumnos
 const getAllAlumnos = asyncHandler(async (req, res) => {
   const { grado, grupo, buscar, page = 1, limit = 50 } = req.query;
   
@@ -164,7 +180,6 @@ const updateAlumno = asyncHandler(async (req, res) => {
 
 const deleteAlumno = asyncHandler(async (req, res) => {
   const { id } = req.params;
-
   await executeQuery('DELETE FROM alumnos WHERE alumno_id = ?', [id]);
 
   res.json({
@@ -343,7 +358,7 @@ const decrementarGradoAlumnos = asyncHandler(async (req, res) => {
     data: { alumnos_actualizados: result.affectedRows }
   });
 });
-
+// controllers de maestros
 const getAllMaestros = asyncHandler(async (req, res) => {
   const { buscar } = req.query;
   
@@ -443,7 +458,6 @@ const updateMaestro = asyncHandler(async (req, res) => {
 
 const deleteMaestro = asyncHandler(async (req, res) => {
   const { id } = req.params;
-
   await executeQuery('DELETE FROM maestros WHERE maestro_id = ?', [id]);
 
   res.json({
@@ -548,7 +562,7 @@ const importMaestrosCSV = asyncHandler(async (req, res) => {
     data: { insertados: insertados.length, omitidos: omitidos.length, detalles_omitidos: omitidos }
   });
 });
-
+// controllers de clases
 const getAllClases = asyncHandler(async (req, res) => {
   const { maestro_id } = req.query;
   
@@ -662,7 +676,6 @@ const updateClase = asyncHandler(async (req, res) => {
 
 const deleteClase = asyncHandler(async (req, res) => {
   const { id } = req.params;
-
   await executeQuery('DELETE FROM clases WHERE clase_id = ?', [id]);
 
   res.json({
@@ -811,6 +824,7 @@ const deleteGrupoCompleto = asyncHandler(async (req, res) => {
   });
 });
 
+// controllers de inscripciones
 const getInscripcionesByClase = asyncHandler(async (req, res) => {
   const { claseId } = req.params;
 
@@ -865,149 +879,171 @@ const addAlumnoToClase = asyncHandler(async (req, res) => {
   });
 });
 
-const removeAlumnoFromClase = asyncHandler(async (req, res) => {
-  const { inscripcionId } = req.params;
+const addMultiplesAlumnosToClase = asyncHandler(async (req, res) => {
+  const { alumno_ids, clase_id } = req.body;
 
-  await executeQuery('DELETE FROM inscripciones WHERE inscripcion_id = ?', [inscripcionId]);
+  if (!alumno_ids || !Array.isArray(alumno_ids) || alumno_ids.length === 0 || !clase_id) {
+    throw new AppError('Se requieren alumno_ids (array) y clase_id', 400, 'MISSING_FIELDS');
+  }
+
+  const clase = await executeQuery('SELECT clase_id FROM clases WHERE clase_id = ?', [clase_id]);
+  if (clase.length === 0) {
+    throw new AppError('Clase no encontrada', 404, 'CLASE_NOT_FOUND');
+  }
+
+  const queries = [];
+  const insertados = [];
+  const yaInscritos = [];
+
+  for (const alumno_id of alumno_ids) {
+    const inscrito = await executeQuery(
+      'SELECT inscripcion_id FROM inscripciones WHERE alumno_id = ? AND clase_id = ?',
+      [alumno_id, clase_id]
+    );
+
+    if (inscrito.length > 0) {
+      yaInscritos.push(alumno_id);
+      continue;
+    }
+
+    queries.push({
+      query: 'INSERT INTO inscripciones (alumno_id, clase_id) VALUES (?, ?)',
+      params: [alumno_id, clase_id]
+    });
+    insertados.push(alumno_id);
+  }
+
+  if (queries.length > 0) {
+    await executeTransaction(queries);
+  }
 
   res.json({
     success: true,
-    message: 'Alumno removido de la clase exitosamente'
-  });
-});
-const getGradosYGrupos = asyncHandler(async (req, res) => {
-  const [grados, grupos] = await Promise.all([
-    executeQuery(`
-      SELECT DISTINCT grado 
-      FROM alumnos 
-      ORDER BY grado
-    `),
-    executeQuery(`
-      SELECT DISTINCT grupo 
-      FROM alumnos 
-      ORDER BY grupo
-    `)
-  ]);
-
-  res.json({
-    success: true,
+    message: `${insertados.length} alumnos inscritos exitosamente`,
     data: {
-      grados: grados.map(g => g.grado),
-      grupos: grupos.map(g => g.grupo)
+      inscritos: insertados.length,
+      ya_inscritos: yaInscritos.length,
+      total_procesados: alumno_ids.length
     }
   });
 });
 
-// GESTIÓN DE NOTIFICACIONES
+const addGrupoCompletoToClase = asyncHandler(async (req, res) => {
+  const { grado, grupo, clase_id } = req.body;
 
-const getAllNotificaciones = asyncHandler(async (req, res) => {
-  const { status, tipo, page = 1, limit = 50 } = req.query;
-  
-  let query = `
-    SELECT 
-      n.notificacion_id,
-      n.titulo,
-      n.mensaje,
-      n.tipo_destinatario,
-      n.status,
-      n.creado_por_tipo,
-      DATE_FORMAT(n.fecha_creacion, '%d/%m/%Y %H:%i') as fecha_creacion,
-      DATE_FORMAT(n.fecha_aprobacion, '%d/%m/%Y %H:%i') as fecha_aprobacion,
-      CASE 
-        WHEN n.creado_por_tipo = 'maestro' THEN m.nombre
-        WHEN n.creado_por_tipo = 'administrador' THEN a.nombre
-      END as creador_nombre,
-      CASE 
-        WHEN n.creado_por_tipo = 'maestro' THEN m.apellido_paterno
-        WHEN n.creado_por_tipo = 'administrador' THEN a.apellido_paterno
-      END as creador_apellido,
-      DATEDIFF(NOW(), n.fecha_creacion) as dias_antiguedad
-    FROM notificaciones n
-    LEFT JOIN maestros m ON n.creado_por_id = m.maestro_id AND n.creado_por_tipo = 'maestro'
-    LEFT JOIN administradores a ON n.creado_por_id = a.admin_id AND n.creado_por_tipo = 'administrador'
-    WHERE 1=1
-  `;
-  
-  const params = [];
-
-  if (status) {
-    query += ' AND n.status = ?';
-    params.push(status);
+  if (!grado || !grupo || !clase_id) {
+    throw new AppError('Se requieren grado, grupo y clase_id', 400, 'MISSING_FIELDS');
   }
 
-  if (tipo) {
-    query += ' AND n.tipo_destinatario = ?';
-    params.push(tipo);
-  }
-
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  query += ` ORDER BY n.fecha_creacion DESC LIMIT ${parseInt(limit)} OFFSET ${offset}`;
-
-  const notificaciones = await executeQuery(query, params);
-  
-  // Contar total
-  let countQuery = 'SELECT COUNT(*) as total FROM notificaciones WHERE 1=1';
-  if (status) countQuery += ' AND status = ?';
-  if (tipo) countQuery += ' AND tipo_destinatario = ?';
-  
-  const [{ total }] = await executeQuery(countQuery, params);
-
-  res.json({
-    success: true,
-    data: notificaciones,
-    pagination: {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      total,
-      pages: Math.ceil(total / parseInt(limit))
-    }
-  });
-});
-
-
-//Editar una notificación aprobada
-
-const editNotificacion = asyncHandler(async (req, res) => {
-  const { notificacionId } = req.params;
-  const { titulo, mensaje } = req.body;
-  
-  if (!titulo && !mensaje) {
-    throw new AppError('Debes proporcionar al menos título o mensaje para actualizar', 400, 'NO_FIELDS');
-  }
-
-  // Verificar que la notificación existe y está aprobada
-  const notificacion = await executeQuery(
-    'SELECT status FROM notificaciones WHERE notificacion_id = ?',
-    [notificacionId]
+  const alumnos = await executeQuery(
+    'SELECT alumno_id FROM alumnos WHERE grado = ? AND grupo = ?',
+    [grado, grupo]
   );
 
-  if (notificacion.length === 0) {
-    throw new AppError('Notificación no encontrada', 404, 'NOTIFICATION_NOT_FOUND');
+  if (alumnos.length === 0) {
+    throw new AppError('No se encontraron alumnos en este grupo', 404, 'NO_STUDENTS');
   }
 
-  if (notificacion[0].status !== 'Aprobada') {
-    throw new AppError('Solo se pueden editar notificaciones aprobadas', 400, 'NOT_APPROVED');
+  const queries = [];
+  const insertados = [];
+  const yaInscritos = [];
+
+  for (const alumno of alumnos) {
+    const inscrito = await executeQuery(
+      'SELECT inscripcion_id FROM inscripciones WHERE alumno_id = ? AND clase_id = ?',
+      [alumno.alumno_id, clase_id]
+    );
+
+    if (inscrito.length > 0) {
+      yaInscritos.push(alumno.alumno_id);
+      continue;
+    }
+
+    queries.push({
+      query: 'INSERT INTO inscripciones (alumno_id, clase_id) VALUES (?, ?)',
+      params: [alumno.alumno_id, clase_id]
+    });
+    insertados.push(alumno.alumno_id);
   }
 
+  if (queries.length > 0) {
+    await executeTransaction(queries);
+  }
+
+  res.json({
+    success: true,
+    message: `Grupo ${grado}° ${grupo} inscrito a la clase`,
+    data: {
+      total_alumnos: alumnos.length,
+      inscritos: insertados.length,
+      ya_inscritos: yaInscritos.length
+    }
+  });
+});
+
+const removeAlumnoFromClase = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  await executeQuery('DELETE FROM inscripciones WHERE inscripcion_id = ?', [id]);
+
+  res.json({
+    success: true,
+    message: 'Inscripción eliminada exitosamente'
+  });
+});
+
+const getAllNotificaciones = asyncHandler(async (req, res) => {
+  const notificaciones = await executeQuery(`
+    SELECT * FROM notificaciones 
+    ORDER BY fecha_creacion DESC, notificacion_id DESC
+  `);
+
+  res.json({
+    success: true,
+    data: notificaciones
+  });
+});
+
+const getNotificacionById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  const notif = await executeQuery(
+    'SELECT * FROM notificaciones WHERE notificacion_id = ?',
+    [id]
+  );
+
+  if (notif.length === 0) {
+    throw new AppError('Notificación no encontrada', 404, 'NOT_FOUND');
+  }
+
+  res.json({
+    success: true,
+    data: notif[0]
+  });
+});
+
+
+const editNotificacion = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const campos = req.body;
+
+  const camposPermitidos = ['titulo', 'mensaje', 'status', 'fecha_expiracion'];
   const updates = [];
   const values = [];
 
-  if (titulo) {
-    updates.push('titulo = ?');
-    values.push(titulo);
+  Object.keys(campos).forEach(campo => {
+    if (camposPermitidos.includes(campo)) {
+      updates.push(`${campo} = ?`);
+      values.push(campos[campo]);
+    }
+  });
+
+  if (updates.length === 0) {
+    throw new AppError('No hay campos válidos para actualizar', 400, 'NO_VALID_FIELDS');
   }
 
-  if (mensaje) {
-    updates.push('mensaje = ?');
-    values.push(mensaje);
-  }
-
-  values.push(notificacionId);
-
-  await executeQuery(
-    `UPDATE notificaciones SET ${updates.join(', ')} WHERE notificacion_id = ?`,
-    values
-  );
+  values.push(id);
+  await executeQuery(`UPDATE notificaciones SET ${updates.join(', ')} WHERE notificacion_id = ?`, values);
 
   res.json({
     success: true,
@@ -1015,179 +1051,76 @@ const editNotificacion = asyncHandler(async (req, res) => {
   });
 });
 
-// Eliminar una notificación 
-
 const deleteNotificacion = asyncHandler(async (req, res) => {
-  const { notificacionId } = req.params;
+  const { id } = req.params;
 
-  const notificacion = await executeQuery(
-    'SELECT notificacion_id FROM notificaciones WHERE notificacion_id = ?',
-    [notificacionId]
+  await executeQuery('DELETE FROM notificaciones WHERE notificacion_id = ?', [id]);
+
+  res.json({
+    success: true,
+    message: 'Notificación eliminada exitosamente'
+  });
+});
+
+const cleanExpiredNotificaciones = asyncHandler(async (req, res) => {
+  const result = await executeQuery(
+    'DELETE FROM notificaciones WHERE fecha_expiracion < NOW()'
   );
 
-  if (notificacion.length === 0) {
-    throw new AppError('Notificación no encontrada', 404, 'NOTIFICATION_NOT_FOUND');
-  }
-
-  await executeQuery('DELETE FROM notificaciones WHERE notificacion_id = ?', [notificacionId]);
-
   res.json({
     success: true,
-    message: 'Notificación eliminada permanentemente'
+    message: `${result.affectedRows} notificaciones expiradas eliminadas`,
+    data: { eliminadas: result.affectedRows }
   });
 });
 
-
-//Limpiar notificaciones expiradas 
-const cleanExpiredNotificaciones = asyncHandler(async (req, res) => {
-  const result = await executeQuery(`
-    DELETE FROM notificaciones 
-    WHERE fecha_creacion < DATE_SUB(NOW(), INTERVAL 14 DAY)
-  `);
-
-  res.json({
-    success: true,
-    message: `${result.affectedRows} notificaciones antiguas eliminadas`,
-    data: {
-      notificaciones_eliminadas: result.affectedRows
-    }
-  });
-});
-
-// GESTIÓN DE ASISTENCIAS
-
-
-//Ver asistencias de una clase específica
-
+// controllers de asistencias
 const getAsistenciasByClase = asyncHandler(async (req, res) => {
   const { claseId } = req.params;
-  const { fecha_inicio, fecha_fin, alumno_id, page = 1, limit = 100 } = req.query;
 
-  // Verificar que la clase existe
-  const clase = await executeQuery(
-    'SELECT clase_id, nombre_clase, codigo_clase FROM clases WHERE clase_id = ?',
-    [claseId]
-  );
-
-  if (clase.length === 0) {
-    throw new AppError('Clase no encontrada', 404, 'CLASE_NOT_FOUND');
-  }
-
-  let query = `
+  const asistencias = await executeQuery(`
     SELECT 
       a.asistencia_id,
       a.fecha_asistencia,
-      a.estado_asistencia,
+      a.estado_asistencia as status,
       al.alumno_id,
-      al.nombre,
-      al.apellido_paterno,
-      al.apellido_materno,
       al.matricula,
-      m.nombre as registrado_por_nombre,
-      m.apellido_paterno as registrado_por_apellido
+      CONCAT(al.nombre, ' ', al.apellido_paterno, ' ', COALESCE(al.apellido_materno, '')) as nombre_alumno
     FROM asistencias a
     JOIN alumnos al ON a.alumno_id = al.alumno_id
-    LEFT JOIN maestros m ON a.registrado_por = m.maestro_id
     WHERE a.clase_id = ?
-  `;
-
-  const params = [claseId];
-
-  if (fecha_inicio && fecha_fin) {
-    query += ' AND a.fecha_asistencia BETWEEN ? AND ?';
-    params.push(fecha_inicio, fecha_fin);
-  }
-
-  if (alumno_id) {
-    query += ' AND a.alumno_id = ?';
-    params.push(alumno_id);
-  }
-
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  query += ` ORDER BY a.fecha_asistencia DESC, al.apellido_paterno, al.nombre LIMIT ${parseInt(limit)} OFFSET ${offset}`;
-
-  const asistencias = await executeQuery(query, params);
-
-  // Estadísticas generales
-  const stats = await executeQuery(`
-    SELECT 
-      COUNT(*) as total_registros,
-      SUM(CASE WHEN estado_asistencia = 'Presente' THEN 1 ELSE 0 END) as presentes,
-      SUM(CASE WHEN estado_asistencia = 'Ausente' THEN 1 ELSE 0 END) as ausentes,
-      SUM(CASE WHEN estado_asistencia = 'Retardo' THEN 1 ELSE 0 END) as retardos,
-      SUM(CASE WHEN estado_asistencia = 'Justificado' THEN 1 ELSE 0 END) as justificados
-    FROM asistencias
-    WHERE clase_id = ?
+    ORDER BY a.fecha_asistencia DESC, al.apellido_paterno
   `, [claseId]);
 
   res.json({
     success: true,
-    data: {
-      clase: clase[0],
-      asistencias: asistencias,
-      estadisticas: stats[0]
-    }
+    data: asistencias
   });
 });
 
-
-//Eliminar TODO el historial de asistencias de una clase
 const deleteAllAsistenciasClase = asyncHandler(async (req, res) => {
   const { claseId } = req.params;
 
-  // Verificar que la clase existe
-  const clase = await executeQuery(
-    'SELECT nombre_clase FROM clases WHERE clase_id = ?',
-    [claseId]
-  );
-
-  if (clase.length === 0) {
-    throw new AppError('Clase no encontrada', 404, 'CLASE_NOT_FOUND');
-  }
-
-  // Contar registros antes de eliminar
-  const [{ total }] = await executeQuery(
-    'SELECT COUNT(*) as total FROM asistencias WHERE clase_id = ?',
-    [claseId]
-  );
-
-  if (total === 0) {
-    throw new AppError('No hay registros de asistencia para esta clase', 404, 'NO_RECORDS');
-  }
-
-  // Eliminar todos los registros
-  await executeQuery('DELETE FROM asistencias WHERE clase_id = ?', [claseId]);
+  const result = await executeQuery('DELETE FROM asistencias WHERE clase_id = ?', [claseId]);
 
   res.json({
     success: true,
-    message: `Historial de asistencias eliminado para la clase: ${clase[0].nombre_clase}`,
-    data: {
-      registros_eliminados: total
-    }
+    message: `${result.affectedRows} registros de asistencia eliminados`,
+    data: { eliminados: result.affectedRows }
   });
 });
 
-
-//Eliminar asistencia individual 
 const deleteAsistencia = asyncHandler(async (req, res) => {
-  const { asistenciaId } = req.params;
+  const { id } = req.params;
 
-  const asistencia = await executeQuery(
-    'SELECT asistencia_id FROM asistencias WHERE asistencia_id = ?',
-    [asistenciaId]
-  );
-
-  if (asistencia.length === 0) {
-    throw new AppError('Registro de asistencia no encontrado', 404, 'ASISTENCIA_NOT_FOUND');
-  }
-
-  await executeQuery('DELETE FROM asistencias WHERE asistencia_id = ?', [asistenciaId]);
+  await executeQuery('DELETE FROM asistencias WHERE asistencia_id = ?', [id]);
 
   res.json({
     success: true,
-    message: 'Registro de asistencia eliminado'
+    message: 'Asistencia eliminada exitosamente'
   });
 });
+
 module.exports = {
   getDashboardStats,
   getGradosYGrupos,
@@ -1200,7 +1133,6 @@ module.exports = {
   importAlumnosCSV,
   incrementarGradoAlumnos,
   decrementarGradoAlumnos,
-
   getAllMaestros,
   getMaestroById,
   createMaestro,
@@ -1208,7 +1140,6 @@ module.exports = {
   deleteMaestro,
   previewMaestrosCSV,
   importMaestrosCSV,
-  
   getAllClases,
   getClaseById,
   createClase,
@@ -1217,17 +1148,16 @@ module.exports = {
   previewClasesCSV,
   importClasesCSV,
   deleteGrupoCompleto,
-  
   getInscripcionesByClase,
   addAlumnoToClase,
+  addMultiplesAlumnosToClase,
+  addGrupoCompletoToClase,
   removeAlumnoFromClase,
-
   getAllNotificaciones,
+  getNotificacionById,
   editNotificacion,
   deleteNotificacion,
   cleanExpiredNotificaciones,
-  
-  // Asistencias
   getAsistenciasByClase,
   deleteAllAsistenciasClase,
   deleteAsistencia

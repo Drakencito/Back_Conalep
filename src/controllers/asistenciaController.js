@@ -1,5 +1,6 @@
 const { executeQuery, executeTransaction } = require('../config/database');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
+const PDFDocument = require('pdfkit');
 
 const getAlumnosParaAsistencia = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
@@ -47,7 +48,6 @@ const getAlumnosParaAsistencia = asyncHandler(async (req, res) => {
   });
 });
 
-
 const guardarAsistencias = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
   const { asistencias, fecha } = req.body; 
@@ -57,7 +57,6 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
     throw new AppError('Solo maestros pueden registrar asistencias', 403, 'ACCESS_DENIED');
   }
 
-  
   if (!asistencias || !Array.isArray(asistencias) || asistencias.length === 0) {
     throw new AppError('Se requiere al menos una asistencia', 400, 'INVALID_DATA');
   }
@@ -121,6 +120,64 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
       total_registros: resultado.total,
       fecha: fecha,
       materia_id: materiaId
+    }
+  });
+});
+
+// NUEVO: Editar asistencia individual (para cualquier fecha)
+const editarAsistenciaIndividual = asyncHandler(async (req, res) => {
+  const { materiaId } = req.params;
+  const { alumno_id, fecha, nuevo_estado } = req.body;
+  const { id: maestroId, userType } = req.user;
+  
+  if (userType !== 'maestro') {
+    throw new AppError('Solo maestros pueden editar asistencias', 403, 'ACCESS_DENIED');
+  }
+
+  if (!alumno_id || !fecha || !nuevo_estado) {
+    throw new AppError('Se requiere alumno_id, fecha y nuevo_estado', 400, 'MISSING_FIELDS');
+  }
+
+  // Verificar que el maestro tiene acceso a esta materia
+  const claseCheck = await executeQuery(
+    'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
+    [materiaId, maestroId]
+  );
+
+  if (claseCheck.length === 0) {
+    throw new AppError('No tienes acceso a esta materia', 403, 'ACCESS_DENIED');
+  }
+
+  const estadosValidos = ['Presente', 'Ausente', 'Retardo', 'Justificado'];
+  if (!estadosValidos.includes(nuevo_estado)) {
+    throw new AppError('Estado de asistencia inválido', 400, 'INVALID_STATUS');
+  }
+
+  // Verificar que existe la asistencia
+  const asistenciaExiste = await executeQuery(
+    'SELECT asistencia_id FROM asistencias WHERE clase_id = ? AND alumno_id = ? AND fecha_asistencia = ?',
+    [materiaId, alumno_id, fecha]
+  );
+
+  if (asistenciaExiste.length === 0) {
+    throw new AppError('No existe registro de asistencia para esta fecha', 404, 'ASISTENCIA_NOT_FOUND');
+  }
+
+  // Actualizar la asistencia
+  await executeQuery(
+    `UPDATE asistencias 
+     SET estado_asistencia = ?, registrado_por = ?
+     WHERE clase_id = ? AND alumno_id = ? AND fecha_asistencia = ?`,
+    [nuevo_estado, maestroId, materiaId, alumno_id, fecha]
+  );
+
+  res.json({
+    success: true,
+    message: 'Asistencia actualizada exitosamente',
+    data: {
+      alumno_id,
+      fecha,
+      nuevo_estado
     }
   });
 });
@@ -226,11 +283,265 @@ const getAsistenciasPorFecha = asyncHandler(async (req, res) => {
   });
 });
 
+// NUEVO: Vista de cuadrícula (matriz de asistencias)
+const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
+  const { materiaId } = req.params;
+  const { fecha_inicio, fecha_fin } = req.query;
+  const { id: maestroId, userType } = req.user;
+  
+  if (userType !== 'maestro') {
+    throw new AppError('Solo maestros pueden acceder a esta información', 403, 'ACCESS_DENIED');
+  }
+
+  if (!fecha_inicio || !fecha_fin) {
+    throw new AppError('Se requiere fecha_inicio y fecha_fin', 400, 'MISSING_DATES');
+  }
+
+  const claseCheck = await executeQuery(
+    'SELECT c.clase_id, c.nombre_clase, c.codigo_clase, m.nombre as maestro_nombre, m.apellido_paterno as maestro_apellido FROM clases c JOIN maestros m ON c.maestro_id = m.maestro_id WHERE c.clase_id = ? AND c.maestro_id = ?',
+    [materiaId, maestroId]
+  );
+
+  if (claseCheck.length === 0) {
+    throw new AppError('No tienes acceso a esta materia', 403, 'ACCESS_DENIED');
+  }
+
+  // Obtener todos los alumnos
+  const alumnos = await executeQuery(`
+    SELECT 
+      a.alumno_id,
+      a.nombre,
+      a.apellido_paterno,
+      a.apellido_materno,
+      a.matricula
+    FROM inscripciones i
+    JOIN alumnos a ON i.alumno_id = a.alumno_id
+    WHERE i.clase_id = ?
+    ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
+  `, [materiaId]);
+
+  // Obtener todas las fechas con asistencia en el rango
+  const fechas = await executeQuery(`
+    SELECT DISTINCT fecha_asistencia
+    FROM asistencias
+    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
+    ORDER BY fecha_asistencia
+  `, [materiaId, fecha_inicio, fecha_fin]);
+
+  // Obtener todas las asistencias en el rango
+  const asistencias = await executeQuery(`
+    SELECT 
+      alumno_id,
+      fecha_asistencia,
+      estado_asistencia
+    FROM asistencias
+    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
+  `, [materiaId, fecha_inicio, fecha_fin]);
+
+  // Crear matriz de asistencias
+  const matriz = alumnos.map(alumno => {
+    const registros = {};
+    fechas.forEach(f => {
+      const asistencia = asistencias.find(
+        a => a.alumno_id === alumno.alumno_id && a.fecha_asistencia === f.fecha_asistencia
+      );
+      registros[f.fecha_asistencia] = asistencia ? asistencia.estado_asistencia : null;
+    });
+
+    return {
+      alumno_id: alumno.alumno_id,
+      nombre_completo: `${alumno.apellido_paterno} ${alumno.apellido_materno} ${alumno.nombre}`,
+      matricula: alumno.matricula,
+      asistencias: registros
+    };
+  });
+
+  res.json({
+    success: true,
+    data: {
+      clase: claseCheck[0],
+      fechas: fechas.map(f => f.fecha_asistencia),
+      alumnos: matriz,
+      periodo: {
+        inicio: fecha_inicio,
+        fin: fecha_fin
+      }
+    }
+  });
+});
+
+// NUEVO: Generar PDF de lista de asistencia
+const generarPDFAsistencia = asyncHandler(async (req, res) => {
+  const { materiaId } = req.params;
+  const { fecha_inicio, fecha_fin } = req.query;
+  const { id: maestroId, userType } = req.user;
+  
+  if (userType !== 'maestro') {
+    throw new AppError('Solo maestros pueden generar PDFs', 403, 'ACCESS_DENIED');
+  }
+
+  if (!fecha_inicio || !fecha_fin) {
+    throw new AppError('Se requiere fecha_inicio y fecha_fin', 400, 'MISSING_DATES');
+  }
+
+  // Obtener información de la clase y el maestro
+  const claseInfo = await executeQuery(`
+    SELECT 
+      c.nombre_clase, 
+      c.codigo_clase,
+      m.nombre as maestro_nombre,
+      m.apellido_paterno as maestro_apellido_paterno,
+      m.apellido_materno as maestro_apellido_materno
+    FROM clases c
+    JOIN maestros m ON c.maestro_id = m.maestro_id
+    WHERE c.clase_id = ? AND c.maestro_id = ?
+  `, [materiaId, maestroId]);
+
+  if (claseInfo.length === 0) {
+    throw new AppError('No tienes acceso a esta materia', 403, 'ACCESS_DENIED');
+  }
+
+  const clase = claseInfo[0];
+  const nombreMaestro = `${clase.maestro_nombre} ${clase.maestro_apellido_paterno} ${clase.maestro_apellido_materno || ''}`.trim();
+
+  // Obtener alumnos y asistencias
+  const alumnos = await executeQuery(`
+    SELECT 
+      a.alumno_id,
+      a.nombre,
+      a.apellido_paterno,
+      a.apellido_materno,
+      a.matricula
+    FROM inscripciones i
+    JOIN alumnos a ON i.alumno_id = a.alumno_id
+    WHERE i.clase_id = ?
+    ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
+  `, [materiaId]);
+
+  const fechas = await executeQuery(`
+    SELECT DISTINCT fecha_asistencia
+    FROM asistencias
+    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
+    ORDER BY fecha_asistencia
+  `, [materiaId, fecha_inicio, fecha_fin]);
+
+  const asistencias = await executeQuery(`
+    SELECT alumno_id, fecha_asistencia, estado_asistencia
+    FROM asistencias
+    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
+  `, [materiaId, fecha_inicio, fecha_fin]);
+
+  // Crear PDF
+  const doc = new PDFDocument({ 
+    size: 'LETTER',
+    layout: 'landscape',
+    margins: { top: 50, bottom: 50, left: 50, right: 50 }
+  });
+
+  // Configurar headers para descarga
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename=asistencia_${clase.codigo_clase}_${fecha_inicio}_${fecha_fin}.pdf`);
+
+  doc.pipe(res);
+
+  // Encabezado
+  doc.fontSize(16).font('Helvetica-Bold').text('CONALEP 022 Chiapa de Corzo Chiapas', { align: 'center' });
+  doc.fontSize(12).font('Helvetica').text('Sistema de Control de Asistencias', { align: 'center' });
+  doc.moveDown();
+
+  doc.fontSize(10).font('Helvetica-Bold').text(`Materia: ${clase.nombre_clase} (${clase.codigo_clase})`);
+  doc.fontSize(10).font('Helvetica').text(`Profesor: ${nombreMaestro}`);
+  doc.text(`Período: ${fecha_inicio} al ${fecha_fin}`);
+  doc.moveDown();
+
+  // Tabla de asistencias
+  const tableTop = doc.y;
+  const cellPadding = 5;
+  const rowHeight = 20;
+  const colWidths = {
+    numero: 30,
+    nombre: 200,
+    matricula: 80,
+    fecha: 40
+  };
+
+  // Encabezados
+  let currentX = 50;
+  doc.fontSize(8).font('Helvetica-Bold');
+  doc.text('No.', currentX, tableTop, { width: colWidths.numero, align: 'center' });
+  currentX += colWidths.numero;
+  doc.text('Nombre Completo', currentX, tableTop, { width: colWidths.nombre });
+  currentX += colWidths.nombre;
+  doc.text('Matrícula', currentX, tableTop, { width: colWidths.matricula });
+  currentX += colWidths.matricula;
+
+  // Fechas como columnas
+  fechas.forEach(f => {
+    const fechaCorta = new Date(f.fecha_asistencia).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit' });
+    doc.text(fechaCorta, currentX, tableTop, { width: colWidths.fecha, align: 'center' });
+    currentX += colWidths.fecha;
+  });
+
+  // Línea debajo de encabezados
+  doc.moveTo(50, tableTop + 15).lineTo(currentX, tableTop + 15).stroke();
+
+  // Datos de alumnos
+  let currentY = tableTop + rowHeight;
+  doc.font('Helvetica').fontSize(7);
+
+  alumnos.forEach((alumno, index) => {
+    if (currentY > 500) { // Nueva página si es necesario
+      doc.addPage();
+      currentY = 50;
+    }
+
+    currentX = 50;
+    const nombreCompleto = `${alumno.apellido_paterno} ${alumno.apellido_materno} ${alumno.nombre}`;
+
+    doc.text(index + 1, currentX, currentY, { width: colWidths.numero, align: 'center' });
+    currentX += colWidths.numero;
+    doc.text(nombreCompleto, currentX, currentY, { width: colWidths.nombre });
+    currentX += colWidths.nombre;
+    doc.text(alumno.matricula, currentX, currentY, { width: colWidths.matricula });
+    currentX += colWidths.matricula;
+
+    // Asistencias del alumno
+    fechas.forEach(f => {
+      const asistencia = asistencias.find(
+        a => a.alumno_id === alumno.alumno_id && a.fecha_asistencia === f.fecha_asistencia
+      );
+      
+      let simbolo = '-';
+      if (asistencia) {
+        switch (asistencia.estado_asistencia) {
+          case 'Presente': simbolo = '✓'; break;
+          case 'Ausente': simbolo = 'X'; break;
+          case 'Retardo': simbolo = 'R'; break;
+          case 'Justificado': simbolo = 'J'; break;
+        }
+      }
+
+      doc.text(simbolo, currentX, currentY, { width: colWidths.fecha, align: 'center' });
+      currentX += colWidths.fecha;
+    });
+
+    currentY += rowHeight;
+  });
+
+  // Leyenda
+  doc.moveDown(2);
+  doc.fontSize(8).font('Helvetica-Bold').text('Leyenda:', 50, currentY + 20);
+  doc.font('Helvetica').text('✓ = Presente | X = Ausente | R = Retardo | J = Justificado | - = Sin registro', 50, currentY + 35);
+
+  doc.end();
+});
 
 module.exports = {
   getAlumnosParaAsistencia,
   guardarAsistencias,
+  editarAsistenciaIndividual, 
   getHistorialAsistencias,
-  getAsistenciasPorFecha 
+  getAsistenciasPorFecha,
+  getAsistenciasCuadricula, 
+  generarPDFAsistencia 
 };
-

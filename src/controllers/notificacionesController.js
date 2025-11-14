@@ -322,7 +322,7 @@ const crearNotificacionAdmin = asyncHandler(async (req, res) => {
   const insertQuery = `
     INSERT INTO notificaciones 
     (titulo, mensaje, tipo_destinatario, destinatario_id, destinatario_grupo, destinatario_grado, status, creado_por_id, creado_por_tipo, aprobado_por_id)
-    VALUES (?, ?, ?, ?, NULL, NULL, 'Aprobada', ?, 'administrador', ?)
+    VALUES (?, ?, ?, ?, NULL, NULL, 'Aprobada', ?, 'admin', ?)
   `;
 
   const destinatariosJson = JSON.stringify(destinatarios);
