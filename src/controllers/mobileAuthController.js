@@ -308,11 +308,36 @@ const logoutMobile = asyncHandler(async (req, res) => {
     message: 'Logout exitoso'
   });
 });
+const updateMobileProfile = asyncHandler(async (req, res) => {
+  const { id, userType } = req.user;
+  const { nombre, apellido_paterno, apellido_materno, telefono_contacto, direccion } = req.body;
+  
+  if (!['alumno', 'maestro'].includes(userType)) {
+      throw new AppError('Acceso denegado', 403, 'ACCESS_DENIED');
+  }
+  
+  let query, params;
+  if (userType === 'alumno') {
+      query = `UPDATE alumnos SET nombre=?, apellido_paterno=?, apellido_materno=?, telefono_contacto=?, direccion=? WHERE alumno_id=?`;
+      params = [nombre, apellido_paterno, apellido_materno, telefono_contacto, direccion, id];
+  } else {
+      query = `UPDATE maestros SET nombre=?, apellido_paterno=?, apellido_materno=?, telefono=? WHERE maestro_id=?`;
+      params = [nombre, apellido_paterno, apellido_materno, telefono_contacto, id];
+  }
+  
+  await executeQuery(query, params);
+  
+  res.json({
+      success: true,
+      message: 'Perfil actualizado exitosamente'
+  });
+});
 
 module.exports = {
   requestOTP,
   verifyOTP,
   resendOTP,
   getMobileProfile,
-  logoutMobile
+  logoutMobile,
+  updateMobileProfile
 };
