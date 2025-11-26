@@ -1121,6 +1121,29 @@ const deleteAsistencia = asyncHandler(async (req, res) => {
   });
 });
 
+//  OPERACIONES MASIVAS DE FIN DE CURSO 
+
+const deleteAllInscripciones = asyncHandler(async (req, res) => {
+  const result = await executeQuery('DELETE FROM inscripciones');
+
+  res.json({
+    success: true,
+    message: 'Todas las inscripciones han sido eliminadas',
+    data: { eliminadas: result.affectedRows }
+  });
+});
+
+const deleteAllAsistencias = asyncHandler(async (req, res) => {
+  const result = await executeQuery('DELETE FROM asistencias');
+
+  res.json({
+    success: true,
+    message: 'Todas las asistencias han sido eliminadas',
+    data: { eliminadas: result.affectedRows }
+  });
+});
+
+
 module.exports = {
   getDashboardStats,
   getGradosYGrupos,
@@ -1160,5 +1183,7 @@ module.exports = {
   cleanExpiredNotificaciones,
   getAsistenciasByClase,
   deleteAllAsistenciasClase,
-  deleteAsistencia
+  deleteAsistencia,
+  deleteAllInscripciones, 
+  deleteAllAsistencias
 };

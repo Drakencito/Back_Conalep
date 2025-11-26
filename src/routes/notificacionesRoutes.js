@@ -7,85 +7,48 @@ const {
 } = require('../middleware/auth');
 
 const {
-
+  // Maestro
   getDestinatariosMaestro,
   crearNotificacionMaestro,
   getNotificacionesMaestro,
   
+  // Admin - NOMBRES CORRECTOS
+  getAllNotificaciones,
+  getNotificacionById,
   getNotificacionesPendientes,
   moderarNotificacion,
   crearNotificacionAdmin,
+  updateNotificacion,
+  deleteNotificacion,
+  deleteNotificacionesRechazadas,
+  deleteNotificacionesAntiguas,
 
+  // Alumno
   getNotificacionesAlumno
 } = require('../controllers/notificacionesController');
 
 const router = express.Router();
 
+// Aplicar autenticación a todas las rutas
 router.use(authenticateToken);
 
+// ==================== RUTAS MAESTRO ====================
 router.get('/maestro/destinatarios', requireMaestro, getDestinatariosMaestro);
-
 router.post('/maestro/crear', requireMaestro, crearNotificacionMaestro);
-
 router.get('/maestro/mis-notificaciones', requireMaestro, getNotificacionesMaestro);
 
+// ==================== RUTAS ADMIN ====================
+router.get('/admin/todas', requireAdministrador, getAllNotificaciones);
+router.get('/admin/:id', requireAdministrador, getNotificacionById);
 router.get('/admin/pendientes', requireAdministrador, getNotificacionesPendientes);
+router.post('/admin/moderar/:id', requireAdministrador, moderarNotificacion);
+router.post('/admin/crear', requireAdministrador, crearNotificacionAdmin);
+router.put('/admin/:id', requireAdministrador, updateNotificacion);
+router.delete('/admin/:id', requireAdministrador, deleteNotificacion);
+router.delete('/admin/limpiar/rechazadas', requireAdministrador, deleteNotificacionesRechazadas);
+router.delete('/admin/limpiar/antiguas', requireAdministrador, deleteNotificacionesAntiguas);
 
-router.patch('/admin/moderar/:notificacionId', requireAdministrador, moderarNotificacion);
-
-router.post('/admin/crear-directa', requireAdministrador, crearNotificacionAdmin);
-
+// ==================== RUTAS ALUMNO ====================
 router.get('/alumno/mis-notificaciones', requireAlumno, getNotificacionesAlumno);
-
-router.get('/estadisticas', authenticateToken, async (req, res) => {
-  const { executeQuery } = require('../config/database');
-  const { userType, id } = req.user;
-  
-  try {
-    let stats = {};
-    
-    if (userType === 'maestro') {
-      const [pendientes, aprobadas, rechazadas] = await Promise.all([
-        executeQuery('SELECT COUNT(*) as count FROM notificaciones WHERE creado_por_id = ? AND creado_por_tipo = "maestro" AND status = "Pendiente"', [id]),
-        executeQuery('SELECT COUNT(*) as count FROM notificaciones WHERE creado_por_id = ? AND creado_por_tipo = "maestro" AND status = "Aprobada"', [id]),
-        executeQuery('SELECT COUNT(*) as count FROM notificaciones WHERE creado_por_id = ? AND creado_por_tipo = "maestro" AND status = "Rechazada"', [id])
-      ]);
-      
-      stats = {
-        pendientes: pendientes[0].count,
-        aprobadas: aprobadas[0].count,
-        rechazadas: rechazadas[0].count,
-        total: pendientes[0].count + aprobadas[0].count + rechazadas[0].count
-      };
-    } 
-    else if (userType === 'administrador') {
-      const [pendientes, totalSistema] = await Promise.all([
-        executeQuery('SELECT COUNT(*) as count FROM notificaciones WHERE status = "Pendiente"'),
-        executeQuery('SELECT COUNT(*) as count FROM notificaciones')
-      ]);
-      
-      stats = {
-        pendientes_aprobacion: pendientes[0].count,
-        total_sistema: totalSistema[0].count
-      };
-    }
-    else if (userType === 'alumno') {
-      stats = {
-        message: 'Estadísticas de alumno no implementadas aún'
-      };
-    }
-    
-    res.json({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener estadísticas',
-      details: error.message
-    });
-  }
-});
 
 module.exports = router;
