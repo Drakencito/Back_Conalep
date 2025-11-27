@@ -5,6 +5,7 @@ const {
   requireAlumno, 
   requireAdministrador 
 } = require('../middleware/auth');
+const { confirmPassword } = require('../middleware/passwordConfirmation');
 
 const {
   // Maestro
@@ -12,7 +13,7 @@ const {
   crearNotificacionMaestro,
   getNotificacionesMaestro,
   
-  // Admin - NOMBRES CORRECTOS
+  // Admin
   getAllNotificaciones,
   getNotificacionById,
   getNotificacionesPendientes,
@@ -32,23 +33,23 @@ const router = express.Router();
 // Aplicar autenticación a todas las rutas
 router.use(authenticateToken);
 
-// ==================== RUTAS MAESTRO ====================
+// MAESTRO 
 router.get('/maestro/destinatarios', requireMaestro, getDestinatariosMaestro);
 router.post('/maestro/crear', requireMaestro, crearNotificacionMaestro);
 router.get('/maestro/mis-notificaciones', requireMaestro, getNotificacionesMaestro);
 
-// ==================== RUTAS ADMIN ====================
-router.get('/admin/todas', requireAdministrador, getAllNotificaciones);
-router.get('/admin/:id', requireAdministrador, getNotificacionById);
-router.get('/admin/pendientes', requireAdministrador, getNotificacionesPendientes);
-router.post('/admin/moderar/:id', requireAdministrador, moderarNotificacion);
+//ADMIN 
 router.post('/admin/crear', requireAdministrador, crearNotificacionAdmin);
+router.get('/admin/todas', requireAdministrador, getAllNotificaciones);
+router.get('/admin/pendientes', requireAdministrador, getNotificacionesPendientes);
+router.get('/admin/:id', requireAdministrador, getNotificacionById);
+router.post('/admin/moderar/:id', requireAdministrador, moderarNotificacion);
 router.put('/admin/:id', requireAdministrador, updateNotificacion);
-router.delete('/admin/:id', requireAdministrador, deleteNotificacion);
-router.delete('/admin/limpiar/rechazadas', requireAdministrador, deleteNotificacionesRechazadas);
-router.delete('/admin/limpiar/antiguas', requireAdministrador, deleteNotificacionesAntiguas);
+router.delete('/admin/limpiar/rechazadas', requireAdministrador, confirmPassword, deleteNotificacionesRechazadas);
+router.delete('/admin/limpiar/antiguas', requireAdministrador, confirmPassword, deleteNotificacionesAntiguas);
+router.delete('/admin/:id', requireAdministrador, confirmPassword, deleteNotificacion);
 
-// ==================== RUTAS ALUMNO ====================
+// ALUMNO
 router.get('/alumno/mis-notificaciones', requireAlumno, getNotificacionesAlumno);
 
 module.exports = router;

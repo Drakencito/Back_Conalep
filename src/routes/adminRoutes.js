@@ -34,11 +34,6 @@ const {
   addGrupoCompletoToClase,
   removeAlumnoFromClase,
   deleteAllInscripciones,
-  getAllNotificaciones,
-  getNotificacionById,
-  editNotificacion,
-  deleteNotificacion,
-  cleanExpiredNotificaciones,
   getAsistenciasByClase,
   deleteAllAsistenciasClase,
   deleteAsistencia,
@@ -50,11 +45,11 @@ const router = express.Router();
 router.use(authenticateToken);
 router.use(requireAdministrador);
 
-//rutas de el dashboard
+//  DASHBOARD
 router.get('/dashboard/stats', getDashboardStats);
 router.get('/grados-grupos', getGradosYGrupos);
 
-//rutas de alumnos
+//ALUMNOS 
 router.get('/alumnos', getAllAlumnos);
 router.get('/alumnos/:id', getAlumnoById);
 router.post('/alumnos', createAlumno);
@@ -65,7 +60,7 @@ router.post('/alumnos/csv/import', importAlumnosCSV);
 router.post('/alumnos/incrementar-grado', confirmPassword, incrementarGradoAlumnos);
 router.post('/alumnos/decrementar-grado', confirmPassword, decrementarGradoAlumnos);
 
-//rutas de maestros
+//MAESTROS
 router.get('/maestros', getAllMaestros);
 router.get('/maestros/:id', getMaestroById);
 router.post('/maestros', createMaestro);
@@ -74,35 +69,28 @@ router.delete('/maestros/:id', confirmPassword, deleteMaestro);
 router.post('/maestros/csv/preview', previewMaestrosCSV);
 router.post('/maestros/csv/import', importMaestrosCSV);
 
-//rutas de clases
+// CLASES
 router.get('/clases', getAllClases);
 router.get('/clases/:id', getClaseById);
 router.post('/clases', createClase);
 router.put('/clases/:id', updateClase);
-router.delete('/clases/grupo/:grado/:grupo', confirmPassword, deleteGrupoCompleto); // ← Específica ANTES
-router.delete('/clases/:id', confirmPassword, deleteClase); // ← Genérica DESPUÉS
+router.delete('/clases/grupo/:grado/:grupo', confirmPassword, deleteGrupoCompleto); 
+router.delete('/clases/:id', confirmPassword, deleteClase); 
 router.post('/clases/csv/preview', previewClasesCSV);
 router.post('/clases/csv/import', importClasesCSV);
 
-//rutas de inscripciones
+//INSCRIPCIONES
 router.get('/inscripciones/clase/:claseId', getInscripcionesByClase);
 router.post('/inscripciones', addAlumnoToClase);
 router.post('/inscripciones/multiples', addMultiplesAlumnosToClase);
 router.post('/inscripciones/grupo-completo', addGrupoCompletoToClase);
-router.delete('/inscripciones/todas', confirmPassword, deleteAllInscripciones); // ← Específica ANTES
-router.delete('/inscripciones/:id', confirmPassword, removeAlumnoFromClase); // ← Genérica DESPUÉS
+router.delete('/inscripciones/todas', confirmPassword, deleteAllInscripciones); 
+router.delete('/inscripciones/:id', confirmPassword, removeAlumnoFromClase); 
 
-//rutas de notificaciones
-router.get('/notificaciones', getAllNotificaciones);
-router.get('/notificaciones/:id', getNotificacionById);
-router.put('/notificaciones/:id', editNotificacion);
-router.delete('/notificaciones/limpiar-expiradas', confirmPassword, cleanExpiredNotificaciones); // ← Específica ANTES
-router.delete('/notificaciones/:id', confirmPassword, deleteNotificacion); // ← Genérica DESPUÉS
-
-// ==================== ASISTENCIAS ====================
+// ASISTENCIAS 
 router.get('/asistencias/clase/:claseId', getAsistenciasByClase);
-router.delete('/asistencias/todas', confirmPassword, deleteAllAsistencias); // ← Específica ANTES
+router.delete('/asistencias/todas', confirmPassword, deleteAllAsistencias);
 router.delete('/asistencias/clase/:claseId/todas', confirmPassword, deleteAllAsistenciasClase);
-router.delete('/asistencias/:id', confirmPassword, deleteAsistencia); // ← Genérica DESPUÉS
+router.delete('/asistencias/:id', confirmPassword, deleteAsistencia); 
 
 module.exports = router;

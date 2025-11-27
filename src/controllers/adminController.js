@@ -1,7 +1,7 @@
 const { executeQuery, executeTransaction } = require('../config/database');
 const { AppError, asyncHandler } = require('../middleware/errorHandler');
 
-// controllers de el dashboard
+// ==================== DASHBOARD ====================
 const getDashboardStats = asyncHandler(async (req, res) => {
   const [alumnos, maestros, clases, notificacionesPendientes] = await Promise.all([
     executeQuery('SELECT COUNT(*) as total FROM alumnos'),
@@ -43,7 +43,8 @@ const getGradosYGrupos = asyncHandler(async (req, res) => {
     }
   });
 });
-// controllers de alumnos
+
+// ==================== ALUMNOS ====================
 const getAllAlumnos = asyncHandler(async (req, res) => {
   const { grado, grupo, buscar, page = 1, limit = 50 } = req.query;
   
@@ -358,7 +359,8 @@ const decrementarGradoAlumnos = asyncHandler(async (req, res) => {
     data: { alumnos_actualizados: result.affectedRows }
   });
 });
-// controllers de maestros
+
+// ==================== MAESTROS ====================
 const getAllMaestros = asyncHandler(async (req, res) => {
   const { buscar } = req.query;
   
@@ -562,7 +564,8 @@ const importMaestrosCSV = asyncHandler(async (req, res) => {
     data: { insertados: insertados.length, omitidos: omitidos.length, detalles_omitidos: omitidos }
   });
 });
-// controllers de clases
+
+// ==================== CLASES ====================
 const getAllClases = asyncHandler(async (req, res) => {
   const { maestro_id } = req.query;
   
@@ -824,7 +827,7 @@ const deleteGrupoCompleto = asyncHandler(async (req, res) => {
   });
 });
 
-// controllers de inscripciones
+// ==================== INSCRIPCIONES ====================
 const getInscripcionesByClase = asyncHandler(async (req, res) => {
   const { claseId } = req.params;
 
@@ -992,89 +995,17 @@ const removeAlumnoFromClase = asyncHandler(async (req, res) => {
   });
 });
 
-const getAllNotificaciones = asyncHandler(async (req, res) => {
-  const notificaciones = await executeQuery(`
-    SELECT * FROM notificaciones 
-    ORDER BY fecha_creacion DESC, notificacion_id DESC
-  `);
+const deleteAllInscripciones = asyncHandler(async (req, res) => {
+  const result = await executeQuery('DELETE FROM inscripciones');
 
   res.json({
     success: true,
-    data: notificaciones
-  });
-});
-
-const getNotificacionById = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  
-  const notif = await executeQuery(
-    'SELECT * FROM notificaciones WHERE notificacion_id = ?',
-    [id]
-  );
-
-  if (notif.length === 0) {
-    throw new AppError('Notificación no encontrada', 404, 'NOT_FOUND');
-  }
-
-  res.json({
-    success: true,
-    data: notif[0]
-  });
-});
-
-
-const editNotificacion = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const campos = req.body;
-
-  const camposPermitidos = ['titulo', 'mensaje', 'status', 'fecha_expiracion'];
-  const updates = [];
-  const values = [];
-
-  Object.keys(campos).forEach(campo => {
-    if (camposPermitidos.includes(campo)) {
-      updates.push(`${campo} = ?`);
-      values.push(campos[campo]);
-    }
-  });
-
-  if (updates.length === 0) {
-    throw new AppError('No hay campos válidos para actualizar', 400, 'NO_VALID_FIELDS');
-  }
-
-  values.push(id);
-  await executeQuery(`UPDATE notificaciones SET ${updates.join(', ')} WHERE notificacion_id = ?`, values);
-
-  res.json({
-    success: true,
-    message: 'Notificación actualizada exitosamente'
-  });
-});
-
-const deleteNotificacion = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-
-  await executeQuery('DELETE FROM notificaciones WHERE notificacion_id = ?', [id]);
-
-  res.json({
-    success: true,
-    message: 'Notificación eliminada exitosamente'
-  });
-});
-
-const cleanExpiredNotificaciones = asyncHandler(async (req, res) => {
-  const result = await executeQuery(
-    'DELETE FROM notificaciones WHERE fecha_expiracion < NOW()'
-  );
-
-  res.json({
-    success: true,
-    message: `${result.affectedRows} notificaciones expiradas eliminadas`,
+    message: `${result.affectedRows} inscripciones eliminadas`,
     data: { eliminadas: result.affectedRows }
   });
 });
 
-// controllers de asistencias
+// ==================== ASISTENCIAS ====================
 const getAsistenciasByClase = asyncHandler(async (req, res) => {
   const { claseId } = req.params;
 
@@ -1121,28 +1052,15 @@ const deleteAsistencia = asyncHandler(async (req, res) => {
   });
 });
 
-//  OPERACIONES MASIVAS DE FIN DE CURSO 
-
-const deleteAllInscripciones = asyncHandler(async (req, res) => {
-  const result = await executeQuery('DELETE FROM inscripciones');
-
-  res.json({
-    success: true,
-    message: 'Todas las inscripciones han sido eliminadas',
-    data: { eliminadas: result.affectedRows }
-  });
-});
-
 const deleteAllAsistencias = asyncHandler(async (req, res) => {
   const result = await executeQuery('DELETE FROM asistencias');
 
   res.json({
     success: true,
-    message: 'Todas las asistencias han sido eliminadas',
+    message: `${result.affectedRows} asistencias eliminadas`,
     data: { eliminadas: result.affectedRows }
   });
 });
-
 
 module.exports = {
   getDashboardStats,
@@ -1176,14 +1094,9 @@ module.exports = {
   addMultiplesAlumnosToClase,
   addGrupoCompletoToClase,
   removeAlumnoFromClase,
-  getAllNotificaciones,
-  getNotificacionById,
-  editNotificacion,
-  deleteNotificacion,
-  cleanExpiredNotificaciones,
+  deleteAllInscripciones,
   getAsistenciasByClase,
   deleteAllAsistenciasClase,
   deleteAsistencia,
-  deleteAllInscripciones, 
   deleteAllAsistencias
 };
