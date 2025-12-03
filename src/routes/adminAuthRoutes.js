@@ -1,4 +1,3 @@
-// src/routes/adminAuthRoutes.js
 const express = require('express');
 const { authenticateToken, requireAdministrador } = require('../middleware/auth');
 const {
@@ -8,22 +7,32 @@ const {
   loginAdmin,
   changePassword,
   getAdminProfile,
-  logoutAdmin
+  logoutAdmin,
+  getAllAdmins,      
+  deleteAdmin,     
+  requestPasswordReset,
+  verifyResetCode,
+  resetPassword
 } = require('../controllers/adminAuthController');
 
 const router = express.Router();
 
-// Rutas públicas (sin autenticación)
+// Rutas públicas
 router.get('/check-admins', checkAdminsExist);
 router.post('/register-first', registerFirstAdmin);
 router.post('/login', loginAdmin);
+router.post('/forgot-password', requestPasswordReset);
+router.post('/verify-reset-code', verifyResetCode);
+router.post('/reset-password', resetPassword);
 
-// Rutas protegidas (requieren autenticación de administrador)
+// Rutas protegidas
 router.use(authenticateToken);
 router.use(requireAdministrador);
 
 router.get('/profile', getAdminProfile);
-router.post('/register', registerAdmin); // Admin crea otro admin
+router.get('/list', getAllAdmins);           
+router.post('/register', registerAdmin);
+router.delete('/:id', deleteAdmin);          
 router.post('/change-password', changePassword);
 router.post('/logout', logoutAdmin);
 

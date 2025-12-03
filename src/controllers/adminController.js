@@ -91,27 +91,86 @@ const getAllAlumnos = asyncHandler(async (req, res) => {
 
 const getAlumnoById = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const alumno = await executeQuery('SELECT * FROM alumnos WHERE alumno_id = ?', [id]);
-  
+  const { fechaInicio, fechaFin } = req.query; // 👈 NUEVO: Recibir fechas del query
+
+  // Obtener datos del alumno
+  const alumno = await executeQuery(
+    `SELECT * FROM alumnos WHERE alumno_id = ?`,
+    [id]
+  );
+
   if (alumno.length === 0) {
     throw new AppError('Alumno no encontrado', 404, 'ALUMNO_NOT_FOUND');
   }
 
-  const clases = await executeQuery(`
-    SELECT c.*, i.inscripcion_id, i.fecha_inscripcion
-    FROM inscripciones i
-    JOIN clases c ON i.clase_id = c.clase_id
-    WHERE i.alumno_id = ?
-  `, [id]);
+  // Obtener clases inscritas
+  const clases = await executeQuery(
+    `SELECT c.*, i.inscripcion_id, i.fecha_inscripcion 
+     FROM inscripciones i 
+     JOIN clases c ON i.clase_id = c.clase_id 
+     WHERE i.alumno_id = ?`,
+    [id]
+  );
+
+  // Calcular estadísticas de asistencia por materia
+  const estadisticasAsistencias = await Promise.all(
+    clases.map(async (clase) => {
+      // 👇 NUEVO: Query dinámico con filtro de fechas
+      let query = `
+        SELECT 
+          COUNT(*) as total,
+          SUM(CASE WHEN estado_asistencia = 'Presente' THEN 1 ELSE 0 END) as presentes,
+          SUM(CASE WHEN estado_asistencia = 'Ausente' THEN 1 ELSE 0 END) as ausentes,
+          SUM(CASE WHEN estado_asistencia = 'Retardo' THEN 1 ELSE 0 END) as retardos,
+          SUM(CASE WHEN estado_asistencia = 'Justificado' THEN 1 ELSE 0 END) as justificados
+        FROM asistencias 
+        WHERE alumno_id = ? AND clase_id = ?
+      `;
+      
+      const params = [id, clase.clase_id];
+
+      // Agregar filtro de fechas si existen
+      if (fechaInicio && fechaFin) {
+        query += ` AND fecha_asistencia BETWEEN ? AND ?`;
+        params.push(fechaInicio, fechaFin);
+      }
+
+      const stats = await executeQuery(query, params);
+
+      const stat = stats[0];
+      const total = stat.total || 0;
+
+      return {
+        claseid: clase.clase_id,
+        nombreclase: clase.nombre_clase,
+        codigoclase: clase.codigo_clase,
+        total: total,
+        presentes: stat.presentes || 0,
+        ausentes: stat.ausentes || 0,
+        retardos: stat.retardos || 0,
+        justificados: stat.justificados || 0,
+        porcentajePresentes: total > 0 ? ((stat.presentes / total) * 100).toFixed(2) : '0.00',
+        porcentajeAusentes: total > 0 ? ((stat.ausentes / total) * 100).toFixed(2) : '0.00',
+        porcentajeRetardos: total > 0 ? ((stat.retardos / total) * 100).toFixed(2) : '0.00',
+        porcentajeJustificados: total > 0 ? ((stat.justificados / total) * 100).toFixed(2) : '0.00',
+      };
+    })
+  );
 
   res.json({
     success: true,
     data: {
       ...alumno[0],
-      clases_inscritas: clases
-    }
+      clasesinscritas: clases,
+      estadisticasAsistencias: estadisticasAsistencias,
+      rangoFechas: fechaInicio && fechaFin ? { fechaInicio, fechaFin } : null,
+    },
   });
 });
+
+
+
+
 
 const createAlumno = asyncHandler(async (req, res) => {
   const {

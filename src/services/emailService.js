@@ -250,7 +250,131 @@ const sendWelcomeEmail = async (email, nombre, userType) => {
   }
 };
 
+const sendPasswordRecoveryEmail = async (email, codigo, nombre = 'Administrador') => {
+  const mailOptions = {
+    from: `"Sistema Académico Conalep 022" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
+    to: email,
+    subject: 'Recuperación de Contraseña - Código de Verificación',
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.07);
+          }
+          .header {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+          }
+          .content {
+            padding: 40px 30px;
+          }
+          .code-box {
+            background: #f0f9ff;
+            border: 2px dashed #0284c7;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            margin: 30px 0;
+          }
+          .code {
+            font-size: 42px;
+            font-weight: 800;
+            letter-spacing: 8px;
+            color: #0369a1;
+            font-family: 'Courier New', monospace;
+          }
+          .warning {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 16px 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+          }
+          .footer {
+            background: #f8fafc;
+            padding: 20px 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Recuperación de Contraseña</h1>
+          </div>
+          <div class="content">
+            <h2>Hola ${nombre},</h2>
+            <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+              Recibimos una solicitud para restablecer la contraseña de tu cuenta de administrador.
+            </p>
+            
+            <div class="code-box">
+              <p style="margin: 0 0 10px; font-size: 14px; color: #0369a1; font-weight: 600;">
+                TU CÓDIGO DE VERIFICACIÓN
+              </p>
+              <div class="code">${codigo}</div>
+              <p style="margin: 15px 0 0; font-size: 13px; color: #64748b;">
+                Válido por 15 minutos
+              </p>
+            </div>
+
+            <div class="warning">
+              <strong style="color: #92400e;">Importante:</strong>
+              <p style="margin: 8px 0 0; color: #92400e;">
+                Si no solicitaste este código, <strong>ignora este mensaje</strong>. 
+                Tu cuenta permanece segura.
+              </p>
+            </div>
+
+            <p style="font-size: 14px; color: #64748b; margin-top: 30px;">
+              Este código expirará en <strong>15 minutos</strong>. Si necesitas uno nuevo, 
+              puedes solicitarlo desde la página de recuperación.
+            </p>
+          </div>
+          <div class="footer">
+            <p>© ${new Date().getFullYear()} Sistema Académico - Todos los derechos reservados</p>
+            <p>Este es un correo automático, por favor no responder.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`Código de recuperación enviado a ${email}`);
+  } catch (error) {
+    console.error('Error al enviar email de recuperación:', error);
+    throw error;
+  }
+};
+
 module.exports = {
   sendOTPEmail,
-  sendWelcomeEmail
+  sendWelcomeEmail,
+  sendPasswordRecoveryEmail 
 };
