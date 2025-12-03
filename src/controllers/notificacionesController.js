@@ -13,14 +13,20 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
     throw new AppError('Solo maestros pueden acceder', 403, 'ACCESS_DENIED');
   }
 
+  // 1. Obtener MIS clases/materias
   const materias = await executeQuery(`
-    SELECT clase_id, nombre_clase, codigo_clase
+    SELECT 
+      clase_id,
+      nombre_clase,
+      codigo_clase,
+      (SELECT COUNT(*) FROM inscripciones WHERE clase_id = clases.clase_id) as total_alumnos
     FROM clases
     WHERE maestro_id = ?
     ORDER BY nombre_clase
   `, [maestroId]);
 
-  const alumnosQuery = await executeQuery(`
+  // 2. Obtener TODOS MIS alumnos (de todas mis clases)
+  const misAlumnos = await executeQuery(`
     SELECT DISTINCT
       a.alumno_id,
       a.nombre,
@@ -33,9 +39,10 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
     JOIN alumnos a ON i.alumno_id = a.alumno_id
     JOIN clases c ON i.clase_id = c.clase_id
     WHERE c.maestro_id = ?
-    ORDER BY a.grado, a.grupo, a.apellido_paterno, a.apellido_materno, a.nombre
+    ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
   `, [maestroId]);
 
+  // 3. (Opcional) Alumnos por cada materia
   const alumnosPorMateria = {};
   for (const materia of materias) {
     const alumnos = await executeQuery(`
@@ -56,35 +63,16 @@ const getDestinatariosMaestro = asyncHandler(async (req, res) => {
     alumnosPorMateria[materia.clase_id] = alumnos;
   }
 
-  const gradosYGrupos = await executeQuery(`
-    SELECT DISTINCT a.grado, a.grupo
-    FROM inscripciones i
-    JOIN alumnos a ON i.alumno_id = a.alumno_id
-    JOIN clases c ON i.clase_id = c.clase_id
-    WHERE c.maestro_id = ?
-    ORDER BY a.grado, a.grupo
-  `, [maestroId]);
-
-  const grados = [...new Set(gradosYGrupos.map(g => g.grado))];
-  const grupos = gradosYGrupos.reduce((acc, item) => {
-    if (!acc[item.grado]) acc[item.grado] = [];
-    if (!acc[item.grado].includes(item.grupo)) {
-      acc[item.grado].push(item.grupo);
-    }
-    return acc;
-  }, {});
-
   res.json({
     success: true,
     data: {
-      materias,
-      alumnos_por_materia: alumnosPorMateria,
-      todos_mis_alumnos: alumnosQuery,
-      grados_disponibles: grados,
-      grupos_por_grado: grupos
+      mis_materias: materias,
+      mis_alumnos: misAlumnos,
+      alumnos_por_materia: alumnosPorMateria
     }
   });
 });
+
 
 /**
  * Crear notificación como maestro (queda pendiente de aprobación)
@@ -94,9 +82,7 @@ const crearNotificacionMaestro = asyncHandler(async (req, res) => {
     titulo, 
     mensaje, 
     tipo_destinatario, 
-    destinatarios,
-    grado,
-    grupo
+    destinatarios  // Array de IDs (alumno_id o clase_id)
   } = req.body;
   
   const { id: maestroId, userType } = req.user;
@@ -109,122 +95,77 @@ const crearNotificacionMaestro = asyncHandler(async (req, res) => {
     throw new AppError('Título, mensaje y tipo de destinatario son requeridos', 400, 'MISSING_FIELDS');
   }
 
+  // Tipos válidos simplificados para maestros
   const tiposValidos = [
-    'Alumno_Especifico',
-    'Materia_Completa',
-    'Multiples_Materias',
-    'Multiples_Alumnos',
-    'Grado_Completo',
-    'Grupo_Especifico',
-    'Todos_Mis_Alumnos'
+    'ALUMNOS_ESPECIFICOS',  // Seleccionar alumnos específicos de mis clases
+    'ALUMNOS_CLASE',        // Toda una clase/materia que imparto
+    'TODOS_MIS_ALUMNOS'     // Todos mis alumnos de todas mis clases
   ];
   
   if (!tiposValidos.includes(tipo_destinatario)) {
     throw new AppError('Tipo de destinatario inválido', 400, 'INVALID_RECIPIENT_TYPE');
   }
 
-  let destinatario_id_json = null;
-  let destinatario_grado_value = null;
-  let destinatario_grupo_value = null;
+  let destinatario_id_csv = null;
 
   switch (tipo_destinatario) {
-    case 'Alumno_Especifico':
+    case 'ALUMNOS_ESPECIFICOS':
       if (!destinatarios || destinatarios.length === 0) {
         throw new AppError('Debe especificar al menos un alumno', 400, 'NO_RECIPIENTS');
       }
-      destinatario_id_json = JSON.stringify(destinatarios);
-      break;
-
-    case 'Multiples_Alumnos':
-      if (!destinatarios || destinatarios.length === 0) {
-        throw new AppError('Debe especificar múltiples alumnos', 400, 'NO_RECIPIENTS');
-      }
-      destinatario_id_json = JSON.stringify(destinatarios);
-      break;
-
-    case 'Materia_Completa':
-      if (!destinatarios || destinatarios.length !== 1) {
-        throw new AppError('Debe especificar una materia', 400, 'INVALID_MATERIA');
-      }
-      const acceso = await executeQuery(
-        'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
-        [destinatarios[0], maestroId]
-      );
-      if (acceso.length === 0) {
-        throw new AppError('No tienes acceso a esta materia', 403, 'ACCESS_DENIED');
-      }
-      destinatario_id_json = JSON.stringify(destinatarios);
-      break;
-
-    case 'Multiples_Materias':
-      if (!destinatarios || destinatarios.length === 0) {
-        throw new AppError('Debe especificar al menos una materia', 400, 'NO_RECIPIENTS');
-      }
-      for (const materiaId of destinatarios) {
-        const acceso = await executeQuery(
-          'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
-          [materiaId, maestroId]
-        );
-        if (acceso.length === 0) {
-          throw new AppError(`No tienes acceso a la materia ${materiaId}`, 403, 'ACCESS_DENIED');
+      
+      // Verificar que TODOS los alumnos seleccionados estén en clases del maestro
+      for (const alumnoId of destinatarios) {
+        const verificacion = await executeQuery(`
+          SELECT COUNT(*) as existe
+          FROM inscripciones i
+          JOIN clases c ON i.clase_id = c.clase_id
+          WHERE i.alumno_id = ? AND c.maestro_id = ?
+        `, [alumnoId, maestroId]);
+        
+        if (verificacion[0].existe === 0) {
+          throw new AppError(`El alumno con ID ${alumnoId} no está en tus clases`, 403, 'STUDENT_NOT_IN_YOUR_CLASSES');
         }
       }
-      destinatario_id_json = JSON.stringify(destinatarios);
-      break;
-
-    case 'Grado_Completo':
-      if (!grado) {
-        throw new AppError('Debe especificar el grado', 400, 'MISSING_GRADO');
-      }
-      const alumnosGrado = await executeQuery(`
-        SELECT COUNT(DISTINCT a.alumno_id) as total
-        FROM inscripciones i
-        JOIN alumnos a ON i.alumno_id = a.alumno_id
-        JOIN clases c ON i.clase_id = c.clase_id
-        WHERE c.maestro_id = ? AND a.grado = ?
-      `, [maestroId, grado]);
       
-      if (alumnosGrado[0].total === 0) {
-        throw new AppError('No tienes alumnos en ese grado', 403, 'NO_STUDENTS_IN_GRADE');
-      }
-      destinatario_grado_value = grado;
+      destinatario_id_csv = destinatarios.join(',');
       break;
 
-    case 'Grupo_Especifico':
-      if (!grado || !grupo) {
-        throw new AppError('Debe especificar grado y grupo', 400, 'MISSING_GRADO_GRUPO');
+    case 'ALUMNOS_CLASE':
+      if (!destinatarios || destinatarios.length === 0) {
+        throw new AppError('Debe especificar al menos una materia', 400, 'INVALID_MATERIA');
       }
-      const alumnosGrupo = await executeQuery(`
-        SELECT COUNT(DISTINCT a.alumno_id) as total
-        FROM inscripciones i
-        JOIN alumnos a ON i.alumno_id = a.alumno_id
-        JOIN clases c ON i.clase_id = c.clase_id
-        WHERE c.maestro_id = ? AND a.grado = ? AND a.grupo = ?
-      `, [maestroId, grado, grupo]);
       
-      if (alumnosGrupo[0].total === 0) {
-        throw new AppError('No tienes alumnos en ese grupo', 403, 'NO_STUDENTS_IN_GROUP');
+      // Verificar que TODAS las clases seleccionadas sean del maestro
+      for (const claseId of destinatarios) {
+        const acceso = await executeQuery(
+          'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
+          [claseId, maestroId]
+        );
+        if (acceso.length === 0) {
+          throw new AppError(`No tienes acceso a la materia con ID ${claseId}`, 403, 'ACCESS_DENIED');
+        }
       }
-      destinatario_grado_value = grado;
-      destinatario_grupo_value = grupo;
+      
+      // Si seleccionó múltiples clases, guardarlas separadas por coma
+      destinatario_id_csv = destinatarios.join(',');
       break;
 
-    case 'Todos_Mis_Alumnos':
+    case 'TODOS_MIS_ALUMNOS':
+      // No necesita destinatario_id, se filtrará por maestro_id
+      destinatario_id_csv = null;
       break;
   }
 
   const result = await executeQuery(`
     INSERT INTO notificaciones 
-    (titulo, mensaje, tipo_destinatario, destinatario_id, destinatario_grupo, 
-     destinatario_grado, status, creado_por_id, creado_por_tipo)
-    VALUES (?, ?, ?, ?, ?, ?, 'Pendiente', ?, 'maestro')
+    (titulo, mensaje, tipo_destinatario, destinatario_id, status, creado_por_id, creado_por_tipo)
+    VALUES (?, ?, ?, ?, 'Pendiente', ?, 'maestro')
   `, [
     titulo, 
     mensaje, 
     tipo_destinatario, 
-    destinatario_id_json, 
-    destinatario_grupo_value,
-    destinatario_grado_value, 
+    destinatario_id_csv,
     maestroId
   ]);
 
@@ -237,6 +178,7 @@ const crearNotificacionMaestro = asyncHandler(async (req, res) => {
     }
   });
 });
+
 
 /**
  * Ver mis notificaciones como maestro
@@ -802,113 +744,129 @@ const deleteNotificacionesAntiguas = asyncHandler(async (req, res) => {
 
 // ==================== ALUMNOS ====================
 
-/**
- * Ver notificaciones del alumno
- */
 const getNotificacionesAlumno = asyncHandler(async (req, res) => {
   const { id: alumnoId, userType } = req.user;
-  const { limite = 50 } = req.query;
   
   if (userType !== 'alumno') {
-    throw new AppError('Solo alumnos', 403, 'ACCESS_DENIED');
+    throw new AppError('Solo alumnos pueden acceder', 403, 'ACCESS_DENIED');
   }
 
-  const alumnoData = await executeQuery(
+  const id = parseInt(alumnoId);
+  if (!id || isNaN(id)) {
+    throw new AppError('ID de alumno inválido', 400, 'INVALID_ID');
+  }
+
+  const limit = parseInt(req.query.limit) || 50;
+
+  // Obtener datos del alumno
+  const [alumno] = await executeQuery(
     'SELECT grado, grupo FROM alumnos WHERE alumno_id = ?',
-    [alumnoId]
+    [id]
   );
-
-  if (alumnoData.length === 0) {
-    throw new AppError('Alumno no encontrado', 404, 'NOT_FOUND');
+  
+  if (!alumno) {
+    throw new AppError('Alumno no encontrado', 404, 'ALUMNO_NOT_FOUND');
   }
 
-  const { grado, grupo } = alumnoData[0];
+  const { grado, grupo } = alumno;
 
-  const materiasAlumno = await executeQuery(
+  // Obtener clases inscritas
+  const clasesInscritas = await executeQuery(
     'SELECT clase_id FROM inscripciones WHERE alumno_id = ?',
-    [alumnoId]
+    [id]
   );
-  const materiasIds = materiasAlumno.map(m => m.clase_id);
-
-  const limiteSeguro = Math.max(1, Math.min(100, parseInt(limite)));
   
-  const notificaciones = await executeQuery(`
+  const claseIds = clasesInscritas.map(c => c.clase_id);
+  const claseIdsStr = claseIds.length > 0 ? claseIds.join(',') : '0';
+
+  // Query unificado (ambos usan CSV ahora)
+  const query = `
     SELECT 
-      notificacion_id,
-      titulo,
-      mensaje,
-      tipo_destinatario,
-      destinatario_id,
-      destinatario_grado,
-      destinatario_grupo,
-      DATE_FORMAT(fecha_creacion, '%d/%m/%Y %H:%i') as fecha_creacion,
-      DATE_FORMAT(fecha_aprobacion, '%d/%m/%Y %H:%i') as fecha_aprobacion
-    FROM notificaciones 
-    WHERE status = 'Aprobada'
-    ORDER BY fecha_creacion DESC 
-    LIMIT ?
-  `, [limiteSeguro]);
+      n.notificacion_id,
+      n.titulo,
+      n.mensaje,
+      n.tipo_destinatario,
+      n.destinatario_id,
+      n.destinatario_grado,
+      n.destinatario_grupo,
+      n.fecha_creacion,
+      n.fecha_aprobacion,
+      n.creado_por_tipo,
+      CASE 
+        WHEN n.creado_por_tipo = 'admin' THEN CONCAT(a.nombre, ' ', a.apellido_paterno)
+        WHEN n.creado_por_tipo = 'maestro' THEN CONCAT(m.nombre, ' ', m.apellido_paterno)
+        ELSE 'Sistema'
+      END as enviado_por
+    FROM notificaciones n
+    LEFT JOIN administradores a ON n.creado_por_id = a.admin_id AND n.creado_por_tipo = 'admin'
+    LEFT JOIN maestros m ON n.creado_por_id = m.maestro_id AND n.creado_por_tipo = 'maestro'
+    WHERE n.status = 'Aprobada'
+      AND (
+        -- Admin: Todos los alumnos
+        n.tipo_destinatario = 'TODOS_ALUMNOS'
+        
+        -- Por grado (admin o maestro)
+        OR (n.tipo_destinatario = 'ALUMNOS_GRADO' AND n.destinatario_grado = ?)
+        
+        -- Por grupo (admin o maestro)
+        OR (n.tipo_destinatario = 'ALUMNOS_GRUPO' AND n.destinatario_grado = ? AND n.destinatario_grupo = ?)
+        
+        -- Alumnos específicos - CSV (admin o maestro)
+        OR (n.tipo_destinatario = 'ALUMNOS_ESPECIFICOS' AND FIND_IN_SET(?, n.destinatario_id) > 0)
+        
+        -- Por clase - el alumno debe estar inscrito (admin o maestro)
+        OR (n.tipo_destinatario = 'ALUMNOS_CLASE' AND FIND_IN_SET(n.destinatario_id, '${claseIdsStr}') > 0)
+        
+        -- Todos mis alumnos (solo maestro) - verifica que esté inscrito en alguna clase del maestro
+        OR (n.tipo_destinatario = 'TODOS_MIS_ALUMNOS' AND EXISTS (
+          SELECT 1 FROM inscripciones i 
+          JOIN clases c ON i.clase_id = c.clase_id 
+          WHERE i.alumno_id = ? AND c.maestro_id = n.creado_por_id
+        ))
+      )
+    ORDER BY n.fecha_creacion DESC 
+    LIMIT ${limit}
+  `;
 
-  const notificacionesFiltradas = notificaciones.filter(notif => {
-    try {
-      switch (notif.tipo_destinatario) {
-        case 'Alumno_Especifico':
-          const destinatariosAlumno = JSON.parse(notif.destinatario_id || '[]');
-          return destinatariosAlumno.includes(alumnoId);
-        
-        case 'Multiples_Alumnos':
-        case 'ALUMNOS_ESPECIFICOS':
-          if (notif.destinatario_id) {
-            const alumnoIds = notif.destinatario_id.split(',').map(id => parseInt(id.trim()));
-            return alumnoIds.includes(alumnoId);
-          }
-          return false;
-        
-        case 'Materia_Completa':
-        case 'ALUMNOS_CLASE':
-          const materiaCompleta = JSON.parse(notif.destinatario_id || '[]');
-          return materiaCompleta.some(materiaId => materiasIds.includes(materiaId));
-        
-        case 'Multiples_Materias':
-          const materiasMultiples = JSON.parse(notif.destinatario_id || '[]');
-          return materiasMultiples.some(materiaId => materiasIds.includes(materiaId));
-        
-        case 'Grado_Completo':
-        case 'ALUMNOS_GRADO':
-          return notif.destinatario_grado === grado;
-        
-        case 'Grupo_Especifico':
-        case 'ALUMNOS_GRUPO':
-          return notif.destinatario_grado === grado && notif.destinatario_grupo === grupo;
-        
-        case 'Todos_Alumnos':
-        case 'TODOS_ALUMNOS':
-          return true;
-        
-        case 'Todos_Mis_Alumnos':
-          return true;
-        
-        default:
-          return false;
-      }
-    } catch (e) {
-      console.error('Error filtrando notificación:', notif.notificacion_id, e);
-      return false;
-    }
-  });
+  const params = [
+    grado,           // ALUMNOS_GRADO
+    grado, grupo,    // ALUMNOS_GRUPO
+    id,              // ALUMNOS_ESPECIFICOS
+    id               // TODOS_MIS_ALUMNOS subquery
+  ];
 
-  const notificacionesLimpias = notificacionesFiltradas.map(({ 
-    destinatario_id, 
-    destinatario_grado, 
-    destinatario_grupo, 
-    ...resto 
-  }) => resto);
+  const notificaciones = await executeQuery(query, params);
+
+  const notificacionesFormateadas = notificaciones.map(n => ({
+    ...n,
+    fecha_creacion: n.fecha_creacion
+      ? new Date(n.fecha_creacion).toLocaleString('es-MX', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : null,
+    fecha_aprobacion: n.fecha_aprobacion
+      ? new Date(n.fecha_aprobacion).toLocaleString('es-MX', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : null
+  }));
 
   res.json({
     success: true,
-    data: notificacionesLimpias
+    data: notificacionesFormateadas
   });
 });
+
+
+
 
 module.exports = {
   // Maestros

@@ -65,6 +65,8 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
     throw new AppError('Se requiere la fecha de asistencia', 400, 'INVALID_DATA');
   }
 
+  console.log('📅 Fecha recibida del cliente:', fecha, 'Tipo:', typeof fecha);
+
   const claseCheck = await executeQuery(
     'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
     [materiaId, maestroId]
@@ -81,19 +83,25 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
     }
   }
 
+  // Verificar si ya existen asistencias para esta fecha usando CAST
   const asistenciasExistentes = await executeQuery(
-    'SELECT alumno_id FROM asistencias WHERE clase_id = ? AND fecha_asistencia = ?',
+    `SELECT alumno_id FROM asistencias 
+     WHERE clase_id = ? AND DATE(fecha_asistencia) = CAST(? AS DATE)`,
     [materiaId, fecha]
   );
+
+  console.log('📊 Asistencias existentes:', asistenciasExistentes.length);
 
   let resultado;
 
   if (asistenciasExistentes.length > 0) {
+    // Actualizar existentes usando CAST
     const queries = asistencias.map(asistencia => ({
       query: `
         UPDATE asistencias 
         SET estado_asistencia = ?, registrado_por = ?
-        WHERE clase_id = ? AND alumno_id = ? AND fecha_asistencia = ?
+        WHERE clase_id = ? AND alumno_id = ? 
+        AND DATE(fecha_asistencia) = CAST(? AS DATE)
       `,
       params: [asistencia.estado, maestroId, materiaId, asistencia.alumno_id, fecha]
     }));
@@ -101,10 +109,11 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
     await executeTransaction(queries);
     resultado = { accion: 'actualizado', total: asistencias.length };
   } else {
+    // Insertar nuevas usando CAST para evitar conversión de timezone
     const queries = asistencias.map(asistencia => ({
       query: `
         INSERT INTO asistencias (alumno_id, clase_id, fecha_asistencia, estado_asistencia, registrado_por)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, CAST(? AS DATE), ?, ?)
       `,
       params: [asistencia.alumno_id, materiaId, fecha, asistencia.estado, maestroId]
     }));
@@ -124,7 +133,6 @@ const guardarAsistencias = asyncHandler(async (req, res) => {
   });
 });
 
-// NUEVO: Editar asistencia individual (para cualquier fecha)
 const editarAsistenciaIndividual = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
   const { alumno_id, fecha, nuevo_estado } = req.body;
@@ -138,7 +146,6 @@ const editarAsistenciaIndividual = asyncHandler(async (req, res) => {
     throw new AppError('Se requiere alumno_id, fecha y nuevo_estado', 400, 'MISSING_FIELDS');
   }
 
-  // Verificar que el maestro tiene acceso a esta materia
   const claseCheck = await executeQuery(
     'SELECT clase_id FROM clases WHERE clase_id = ? AND maestro_id = ?',
     [materiaId, maestroId]
@@ -153,9 +160,9 @@ const editarAsistenciaIndividual = asyncHandler(async (req, res) => {
     throw new AppError('Estado de asistencia inválido', 400, 'INVALID_STATUS');
   }
 
-  // Verificar que existe la asistencia
+  // Verificar que existe la asistencia usando CAST
   const asistenciaExiste = await executeQuery(
-    'SELECT asistencia_id FROM asistencias WHERE clase_id = ? AND alumno_id = ? AND fecha_asistencia = ?',
+    'SELECT asistencia_id FROM asistencias WHERE clase_id = ? AND alumno_id = ? AND DATE(fecha_asistencia) = CAST(? AS DATE)',
     [materiaId, alumno_id, fecha]
   );
 
@@ -163,11 +170,11 @@ const editarAsistenciaIndividual = asyncHandler(async (req, res) => {
     throw new AppError('No existe registro de asistencia para esta fecha', 404, 'ASISTENCIA_NOT_FOUND');
   }
 
-  // Actualizar la asistencia
+  // Actualizar la asistencia usando CAST
   await executeQuery(
     `UPDATE asistencias 
      SET estado_asistencia = ?, registrado_por = ?
-     WHERE clase_id = ? AND alumno_id = ? AND fecha_asistencia = ?`,
+     WHERE clase_id = ? AND alumno_id = ? AND DATE(fecha_asistencia) = CAST(? AS DATE)`,
     [nuevo_estado, maestroId, materiaId, alumno_id, fecha]
   );
 
@@ -202,7 +209,7 @@ const getHistorialAsistencias = asyncHandler(async (req, res) => {
 
   let query = `
     SELECT 
-      fecha_asistencia,
+      DATE(fecha_asistencia) as fecha_asistencia,
       COUNT(*) as total_registros,
       SUM(CASE WHEN estado_asistencia = 'Presente' THEN 1 ELSE 0 END) as presentes,
       SUM(CASE WHEN estado_asistencia = 'Ausente' THEN 1 ELSE 0 END) as ausentes,
@@ -215,20 +222,41 @@ const getHistorialAsistencias = asyncHandler(async (req, res) => {
   const params = [materiaId];
 
   if (fecha_inicio && fecha_fin) {
-    query += ' AND fecha_asistencia BETWEEN ? AND ?';
+    query += ' AND DATE(fecha_asistencia) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)';
     params.push(fecha_inicio, fecha_fin);
   }
 
   const limiteSeguro = Math.max(1, Math.min(100, parseInt(limite))); 
-  query += ` GROUP BY fecha_asistencia ORDER BY fecha_asistencia DESC LIMIT ${limiteSeguro}`;
+  query += ` GROUP BY DATE(fecha_asistencia) 
+             ORDER BY DATE(fecha_asistencia) DESC 
+             LIMIT ${limiteSeguro}`;
 
   const historial = await executeQuery(query, params);
+  
+  // Convertir fechas a formato string YYYY-MM-DD
+  const historialFormateado = historial.map(h => {
+    if (typeof h.fecha_asistencia === 'string' && h.fecha_asistencia.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      return h;
+    }
+    
+    const fecha = new Date(h.fecha_asistencia);
+    const year = fecha.getUTCFullYear();
+    const month = String(fecha.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(fecha.getUTCDate()).padStart(2, '0');
+    
+    return {
+      ...h,
+      fecha_asistencia: `${year}-${month}-${day}`
+    };
+  });
+
+  console.log('📅 Historial formateado (primeras 3):', historialFormateado.slice(0, 3));
 
   res.json({
     success: true,
     data: {
       clase: claseCheck[0],
-      historial: historial
+      historial: historialFormateado
     }
   });
 });
@@ -245,6 +273,8 @@ const getAsistenciasPorFecha = asyncHandler(async (req, res) => {
   if (!fecha) {
     throw new AppError('Se requiere especificar la fecha', 400, 'MISSING_DATE');
   }
+
+  console.log('📅 Buscando asistencias para fecha:', fecha);
 
   const claseCheck = await executeQuery(
     'SELECT nombre_clase, codigo_clase FROM clases WHERE clase_id = ? AND maestro_id = ?',
@@ -263,14 +293,17 @@ const getAsistenciasPorFecha = asyncHandler(async (req, res) => {
       al.apellido_materno,
       al.matricula,
       a.estado_asistencia,
-      a.fecha_asistencia
+      DATE(a.fecha_asistencia) as fecha_asistencia
     FROM asistencias a
     JOIN alumnos al ON a.alumno_id = al.alumno_id
-    WHERE a.clase_id = ? AND a.fecha_asistencia = ?
+    WHERE a.clase_id = ? 
+    AND DATE(a.fecha_asistencia) = CAST(? AS DATE)
     ORDER BY al.apellido_paterno, al.apellido_materno, al.nombre
   `;
 
   const asistencias = await executeQuery(query, [materiaId, fecha]);
+
+  console.log('📊 Asistencias encontradas:', asistencias.length);
 
   res.json({
     success: true,
@@ -283,7 +316,6 @@ const getAsistenciasPorFecha = asyncHandler(async (req, res) => {
   });
 });
 
-// NUEVO: Vista de cuadrícula (matriz de asistencias)
 const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
   const { fecha_inicio, fecha_fin } = req.query;
@@ -298,7 +330,10 @@ const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
   }
 
   const claseCheck = await executeQuery(
-    'SELECT c.clase_id, c.nombre_clase, c.codigo_clase, m.nombre as maestro_nombre, m.apellido_paterno as maestro_apellido FROM clases c JOIN maestros m ON c.maestro_id = m.maestro_id WHERE c.clase_id = ? AND c.maestro_id = ?',
+    `SELECT c.clase_id, c.nombre_clase, c.codigo_clase, m.nombre as maestro_nombre, m.apellido_paterno as maestro_apellido 
+     FROM clases c 
+     JOIN maestros m ON c.maestro_id = m.maestro_id 
+     WHERE c.clase_id = ? AND c.maestro_id = ?`,
     [materiaId, maestroId]
   );
 
@@ -306,7 +341,6 @@ const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
     throw new AppError('No tienes acceso a esta materia', 403, 'ACCESS_DENIED');
   }
 
-  // Obtener todos los alumnos
   const alumnos = await executeQuery(`
     SELECT 
       a.alumno_id,
@@ -320,30 +354,30 @@ const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
     ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
   `, [materiaId]);
 
-  // Obtener todas las fechas con asistencia en el rango
   const fechas = await executeQuery(`
-    SELECT DISTINCT fecha_asistencia
+    SELECT DISTINCT DATE(fecha_asistencia) as fecha_asistencia
     FROM asistencias
-    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
-    ORDER BY fecha_asistencia
+    WHERE clase_id = ? 
+    AND DATE(fecha_asistencia) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+    ORDER BY DATE(fecha_asistencia)
   `, [materiaId, fecha_inicio, fecha_fin]);
 
-  // Obtener todas las asistencias en el rango
   const asistencias = await executeQuery(`
     SELECT 
       alumno_id,
-      fecha_asistencia,
+      DATE(fecha_asistencia) as fecha_asistencia,
       estado_asistencia
     FROM asistencias
-    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
+    WHERE clase_id = ? 
+    AND DATE(fecha_asistencia) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
   `, [materiaId, fecha_inicio, fecha_fin]);
 
-  // Crear matriz de asistencias
   const matriz = alumnos.map(alumno => {
     const registros = {};
     fechas.forEach(f => {
       const asistencia = asistencias.find(
-        a => a.alumno_id === alumno.alumno_id && a.fecha_asistencia === f.fecha_asistencia
+        a => a.alumno_id === alumno.alumno_id && 
+             a.fecha_asistencia === f.fecha_asistencia
       );
       registros[f.fecha_asistencia] = asistencia ? asistencia.estado_asistencia : null;
     });
@@ -370,7 +404,6 @@ const getAsistenciasCuadricula = asyncHandler(async (req, res) => {
   });
 });
 
-// NUEVO: Generar PDF de lista de asistencia
 const generarPDFAsistencia = asyncHandler(async (req, res) => {
   const { materiaId } = req.params;
   const { fecha_inicio, fecha_fin } = req.query;
@@ -384,9 +417,9 @@ const generarPDFAsistencia = asyncHandler(async (req, res) => {
     throw new AppError('Se requiere fecha_inicio y fecha_fin', 400, 'MISSING_DATES');
   }
 
-  // Obtener información de la clase y el maestro
   const claseInfo = await executeQuery(`
     SELECT 
+      c.clase_id,
       c.nombre_clase, 
       c.codigo_clase,
       m.nombre as maestro_nombre,
@@ -404,7 +437,6 @@ const generarPDFAsistencia = asyncHandler(async (req, res) => {
   const clase = claseInfo[0];
   const nombreMaestro = `${clase.maestro_nombre} ${clase.maestro_apellido_paterno} ${clase.maestro_apellido_materno || ''}`.trim();
 
-  // Obtener alumnos y asistencias
   const alumnos = await executeQuery(`
     SELECT 
       a.alumno_id,
@@ -416,122 +448,186 @@ const generarPDFAsistencia = asyncHandler(async (req, res) => {
     JOIN alumnos a ON i.alumno_id = a.alumno_id
     WHERE i.clase_id = ?
     ORDER BY a.apellido_paterno, a.apellido_materno, a.nombre
-  `, [materiaId]);
+  `, [clase.clase_id]);
 
   const fechas = await executeQuery(`
-    SELECT DISTINCT fecha_asistencia
+    SELECT DISTINCT DATE(fecha_asistencia) as fecha_asistencia
     FROM asistencias
-    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
-    ORDER BY fecha_asistencia
-  `, [materiaId, fecha_inicio, fecha_fin]);
+    WHERE clase_id = ? 
+    AND DATE(fecha_asistencia) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+    ORDER BY DATE(fecha_asistencia) ASC
+  `, [clase.clase_id, fecha_inicio, fecha_fin]);
 
   const asistencias = await executeQuery(`
-    SELECT alumno_id, fecha_asistencia, estado_asistencia
+    SELECT 
+      alumno_id,
+      DATE(fecha_asistencia) as fecha_asistencia,
+      estado_asistencia
     FROM asistencias
-    WHERE clase_id = ? AND fecha_asistencia BETWEEN ? AND ?
-  `, [materiaId, fecha_inicio, fecha_fin]);
+    WHERE clase_id = ? 
+    AND DATE(fecha_asistencia) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+  `, [clase.clase_id, fecha_inicio, fecha_fin]);
 
-  // Crear PDF
+  console.log('📊 DEBUG PDF:');
+  console.log('  Alumnos:', alumnos.length);
+  console.log('  Fechas:', fechas.length);
+  console.log('  Asistencias totales:', asistencias.length);
+
+  // Normalizar fechas
+  const fechasNormalizadas = fechas.map(f => {
+    if (typeof f.fecha_asistencia === 'string' && f.fecha_asistencia.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      return {
+        original: f.fecha_asistencia,
+        normalizada: f.fecha_asistencia
+      };
+    }
+    
+    const fecha = new Date(f.fecha_asistencia);
+    const year = fecha.getUTCFullYear();
+    const month = String(fecha.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(fecha.getUTCDate()).padStart(2, '0');
+    const normalizada = `${year}-${month}-${day}`;
+    
+    return {
+      original: f.fecha_asistencia,
+      normalizada: normalizada
+    };
+  });
+
+  const asistenciasNormalizadas = asistencias.map(a => {
+    if (typeof a.fecha_asistencia === 'string' && a.fecha_asistencia.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      return {
+        ...a,
+        fecha_normalizada: a.fecha_asistencia
+      };
+    }
+    
+    const fecha = new Date(a.fecha_asistencia);
+    const year = fecha.getUTCFullYear();
+    const month = String(fecha.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(fecha.getUTCDate()).padStart(2, '0');
+    
+    return {
+      ...a,
+      fecha_normalizada: `${year}-${month}-${day}`
+    };
+  });
+
   const doc = new PDFDocument({ 
     size: 'LETTER',
     layout: 'landscape',
-    margins: { top: 50, bottom: 50, left: 50, right: 50 }
+    margins: { top: 40, bottom: 40, left: 40, right: 40 }
   });
 
-  // Configurar headers para descarga
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename=asistencia_${clase.codigo_clase}_${fecha_inicio}_${fecha_fin}.pdf`);
 
   doc.pipe(res);
 
-  // Encabezado
-  doc.fontSize(16).font('Helvetica-Bold').text('CONALEP 022 Chiapa de Corzo Chiapas', { align: 'center' });
-  doc.fontSize(12).font('Helvetica').text('Sistema de Control de Asistencias', { align: 'center' });
-  doc.moveDown();
+  doc.fontSize(14).font('Helvetica-Bold').text('CONALEP 022 Chiapa de Corzo Chiapas', { align: 'center' });
+  doc.fontSize(10).font('Helvetica').text('Sistema de Control de Asistencias', { align: 'center' });
+  doc.moveDown(0.3);
 
-  doc.fontSize(10).font('Helvetica-Bold').text(`Materia: ${clase.nombre_clase} (${clase.codigo_clase})`);
-  doc.fontSize(10).font('Helvetica').text(`Profesor: ${nombreMaestro}`);
-  doc.text(`Período: ${fecha_inicio} al ${fecha_fin}`);
-  doc.moveDown();
+  doc.fontSize(9).font('Helvetica-Bold').text(`Materia: ${clase.nombre_clase} (${clase.codigo_clase})`);
+  doc.fontSize(9).font('Helvetica').text(`Profesor: ${nombreMaestro}`);
+  doc.fontSize(9).text(`Período: ${fecha_inicio} al ${fecha_fin}`);
+  doc.moveDown(0.3);
 
-  // Tabla de asistencias
+  const pageWidth = doc.page.width - 80;
+  const colNumero = 25;
+  const colNombre = 140;
+  const colMatricula = 60;
+  const colFechaAncho = fechasNormalizadas.length > 0 
+    ? (pageWidth - colNumero - colNombre - colMatricula) / fechasNormalizadas.length 
+    : 40;
+
   const tableTop = doc.y;
-  const cellPadding = 5;
-  const rowHeight = 20;
-  const colWidths = {
-    numero: 30,
-    nombre: 200,
-    matricula: 80,
-    fecha: 40
-  };
+  const rowHeight = 14;
 
-  // Encabezados
-  let currentX = 50;
-  doc.fontSize(8).font('Helvetica-Bold');
-  doc.text('No.', currentX, tableTop, { width: colWidths.numero, align: 'center' });
-  currentX += colWidths.numero;
-  doc.text('Nombre Completo', currentX, tableTop, { width: colWidths.nombre });
-  currentX += colWidths.nombre;
-  doc.text('Matrícula', currentX, tableTop, { width: colWidths.matricula });
-  currentX += colWidths.matricula;
+  let currentX = 40;
+  doc.fontSize(7).font('Helvetica-Bold');
+  
+  doc.text('No.', currentX, tableTop, { width: colNumero, align: 'center' });
+  currentX += colNumero;
+  doc.text('Nombre Completo', currentX, tableTop, { width: colNombre });
+  currentX += colNombre;
+  doc.text('Matrícula', currentX, tableTop, { width: colMatricula, align: 'center' });
+  currentX += colMatricula;
 
-  // Fechas como columnas
-  fechas.forEach(f => {
-    const fechaCorta = new Date(f.fecha_asistencia).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit' });
-    doc.text(fechaCorta, currentX, tableTop, { width: colWidths.fecha, align: 'center' });
-    currentX += colWidths.fecha;
+  fechasNormalizadas.forEach(fechaObj => {
+    const [year, month, day] = fechaObj.normalizada.split('-');
+    const fechaCorta = `${day}/${month}`;
+    doc.text(fechaCorta, currentX, tableTop, { width: colFechaAncho, align: 'center' });
+    currentX += colFechaAncho;
   });
 
-  // Línea debajo de encabezados
-  doc.moveTo(50, tableTop + 15).lineTo(currentX, tableTop + 15).stroke();
+  doc.moveTo(40, tableTop + 12).lineTo(doc.page.width - 40, tableTop + 12).stroke();
 
-  // Datos de alumnos
-  let currentY = tableTop + rowHeight;
-  doc.font('Helvetica').fontSize(7);
+  let currentY = tableTop + rowHeight + 5;
+  doc.font('Helvetica').fontSize(6);
 
   alumnos.forEach((alumno, index) => {
-    if (currentY > 500) { // Nueva página si es necesario
+    if (currentY > 480) {
       doc.addPage();
-      currentY = 50;
+      currentY = 40;
+      currentX = 40;
+      doc.fontSize(7).font('Helvetica-Bold');
+      
+      doc.text('No.', currentX, currentY, { width: colNumero, align: 'center' });
+      currentX += colNumero;
+      doc.text('Nombre Completo', currentX, currentY, { width: colNombre });
+      currentX += colNombre;
+      doc.text('Matrícula', currentX, currentY, { width: colMatricula, align: 'center' });
+      currentX += colMatricula;
+      
+      fechasNormalizadas.forEach(fechaObj => {
+        const [year, month, day] = fechaObj.normalizada.split('-');
+        const fechaCorta = `${day}/${month}`;
+        doc.text(fechaCorta, currentX, currentY, { width: colFechaAncho, align: 'center' });
+        currentX += colFechaAncho;
+      });
+      
+      doc.moveTo(40, currentY + 12).lineTo(doc.page.width - 40, currentY + 12).stroke();
+      currentY += rowHeight + 5;
+      doc.fontSize(6).font('Helvetica');
     }
 
-    currentX = 50;
+    currentX = 40;
     const nombreCompleto = `${alumno.apellido_paterno} ${alumno.apellido_materno} ${alumno.nombre}`;
 
-    doc.text(index + 1, currentX, currentY, { width: colWidths.numero, align: 'center' });
-    currentX += colWidths.numero;
-    doc.text(nombreCompleto, currentX, currentY, { width: colWidths.nombre });
-    currentX += colWidths.nombre;
-    doc.text(alumno.matricula, currentX, currentY, { width: colWidths.matricula });
-    currentX += colWidths.matricula;
+    doc.text(String(index + 1), currentX, currentY, { width: colNumero, align: 'center' });
+    currentX += colNumero;
+    doc.text(nombreCompleto, currentX, currentY, { width: colNombre });
+    currentX += colNombre;
+    doc.text(alumno.matricula, currentX, currentY, { width: colMatricula, align: 'center' });
+    currentX += colMatricula;
 
-    // Asistencias del alumno
-    fechas.forEach(f => {
-      const asistencia = asistencias.find(
-        a => a.alumno_id === alumno.alumno_id && a.fecha_asistencia === f.fecha_asistencia
+    fechasNormalizadas.forEach(fechaObj => {
+      const asistencia = asistenciasNormalizadas.find(
+        a => a.alumno_id === alumno.alumno_id && 
+             a.fecha_normalizada === fechaObj.normalizada
       );
       
       let simbolo = '-';
       if (asistencia) {
         switch (asistencia.estado_asistencia) {
-          case 'Presente': simbolo = '✓'; break;
+          case 'Presente': simbolo = '*'; break;
           case 'Ausente': simbolo = 'X'; break;
           case 'Retardo': simbolo = 'R'; break;
           case 'Justificado': simbolo = 'J'; break;
         }
       }
 
-      doc.text(simbolo, currentX, currentY, { width: colWidths.fecha, align: 'center' });
-      currentX += colWidths.fecha;
+      doc.text(simbolo, currentX, currentY, { width: colFechaAncho, align: 'center' });
+      currentX += colFechaAncho;
     });
 
     currentY += rowHeight;
   });
 
-  // Leyenda
-  doc.moveDown(2);
-  doc.fontSize(8).font('Helvetica-Bold').text('Leyenda:', 50, currentY + 20);
-  doc.font('Helvetica').text('✓ = Presente | X = Ausente | R = Retardo | J = Justificado | - = Sin registro', 50, currentY + 35);
+  doc.moveDown(1);
+  doc.fontSize(7).font('Helvetica-Bold').text('Leyenda:', 40, doc.y);
+  doc.font('Helvetica').fontSize(6).text('* = Presente | X = Ausente | R = Retardo | J = Justificado | - = Sin registro', 40, doc.y);
 
   doc.end();
 });
